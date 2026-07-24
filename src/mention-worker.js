@@ -1,18 +1,46 @@
 import { publicSummary } from "./portfolio.js";
+import { looksLikeTrade, parseOrder } from "./trading.js";
+import { fitForPost, limitCashtags } from "./insiders.js";
+import { describeBook } from "./paper-broker.js";
+
+// Words that look like tickers but never are, so a basket is not built from
+// the agent's own prose.
+const NOT_TICKERS = new Set(["I", "A", "THE", "AND", "OR", "IF", "IT", "IS", "BUY", "SELL", "USD", "ETF", "CEO", "AI", "US", "Q1", "Q2", "Q3", "Q4", "YES", "NO", "PE", "EPS", "IPO"]);
+
+// Prefers $-prefixed tickers; falls back to bare uppercase words only when the
+// agent did not cash-tag anything.
+function extractSymbols(text, limit = 4) {
+  const tagged = [...String(text).matchAll(/\$([A-Z]{1,5})\b/g)].map((match) => match[1]);
+  const source = tagged.length > 0 ? tagged : [...String(text).matchAll(/\b([A-Z]{2,5})\b/g)].map((match) => match[1]);
+  return [...new Set(source)].filter((symbol) => !NOT_TICKERS.has(symbol)).slice(0, limit);
+}
 
 export class MentionWorker {
-  constructor({ store, client, bot, publicBaseUrl, logger = console }) {
+  // No reply may contain a URL. X charges $0.20 for a post with a link versus
+  // $0.015 without, so the public base URL is deliberately not available here.
+  constructor({ store, client, bot, logger = console, broker = null, limits = null, insiders = null, llm = null }) {
     this.store = store;
     this.client = client;
     this.bot = bot;
-    this.publicBaseUrl = publicBaseUrl;
     this.logger = logger;
+    this.broker = broker;
+    this.limits = limits;
+    this.insiders = insiders;
+    this.llm = llm;
     this.running = false;
+  }
+
+  // Own LLM first: it answers from live Robinhood data and costs DeepSeek
+  // rates. The insiders agent is the fallback and is Polymarket-tuned.
+  answerer() {
+    if (this.llm?.configured()) return this.llm;
+    if (this.insiders?.configured()) return this.insiders;
+    return null;
   }
 
   start() {
     if (!this.client.configured()) {
-      this.logger.warn("X polling is disabled: set X_BOT_USER_ID and X_BOT_USER_ACCESS_TOKEN to enable it.");
+      this.logger.warn(`X polling is disabled for @${this.bot.botUsername}: set X_BOT_USER_ID plus either the four X_CONSUMER_*/X_ACCESS_* OAuth 1.0a values or X_BOT_USER_ACCESS_TOKEN.`);
       return;
     }
     this.tick().catch((error) => this.logger.error("Initial X poll failed", error));
@@ -25,41 +53,230 @@ export class MentionWorker {
 
   async tick() {
     if (this.running) return;
+    // At a 4s poll the interval runs close to the 300/15min ceiling, so a 429
+    // must pause polling rather than keep burning the window.
+    if (this.backoffUntil && Date.now() < this.backoffUntil) return;
     this.running = true;
     try {
       const response = await this.client.getMentions(await this.store.getLastMentionId(this.bot.botUsername));
       const usernames = new Map((response.includes?.users ?? []).map((user) => [user.id, user.username]));
       const posts = [...(response.data ?? [])].sort((first, second) => BigInt(first.id) < BigInt(second.id) ? -1 : 1);
       for (const post of posts) {
-        const username = usernames.get(post.author_id) ?? "there";
-        const reply = await this.commandReply(post.text, username);
-        if (this.bot.dryRun) {
-          this.logger.info(`[dry run] reply to ${post.id}: ${reply}`);
-        } else {
-          await this.client.reply(post.id, reply);
-        }
+        await this.handleMention({ ...post, username: usernames.get(post.author_id) });
         await this.store.setLastMentionId(this.bot.botUsername, post.id);
       }
+      this.backoffUntil = 0;
+    } catch (error) {
+      if (String(error.message).includes("X API 429")) {
+        this.backoffUntil = Date.now() + 60_000;
+        this.logger.warn(`Rate limited; pausing @${this.bot.botUsername} polls for 60s`);
+        return;
+      }
+      throw error;
     } finally {
       this.running = false;
     }
   }
 
-  async commandReply(text, username) {
+  // Single entry point for a mention, whether it arrived by poll or by webhook.
+  async handleMention(post) {
+    // The stream, the poll loop, and webhooks can all deliver the same post;
+    // whichever arrives first wins and the rest are dropped here.
+    if (post.id && !(await this.store.claimMention(this.bot.botUsername, post.id))) return;
+    const username = post.username ?? "there";
+    this.pendingBasket = null;
+    const reply = await this.commandReply(post.text, username, post);
+    if (reply === null) return;
+    if (this.bot.dryRun) {
+      this.logger.info(`[dry run] reply to ${post.id}: ${reply}`);
+      return;
+    }
+    // X prepends the mention on a reply automatically, so `reply` must not
+    // repeat it or the post ships with the handle twice.
+    let sent;
+    try {
+      sent = await this.client.reply(post.id, limitCashtags(reply));
+    } catch (error) {
+      // The claim is released so the poll fallback can retry. Orders are
+      // guarded separately by claimOrder, so a retry cannot double-fill.
+      await this.store.releaseMention?.(this.bot.botUsername, post.id);
+      throw error;
+    }
+    const sentId = sent?.data?.id;
+    // The basket is keyed by the bot's own reply, so only a reply to THAT post
+    // can confirm it. Saved after sending because the ID does not exist before.
+    if (this.pendingBasket && sentId) {
+      await this.store.savePendingBasket(this.bot.botUsername, sentId, this.pendingBasket);
+    }
+    this.pendingBasket = null;
+    this.logger.info(`Replied to ${post.id} (@${username}) as ${sentId ?? "unknown"}: ${reply}`);
+  }
+
+  async commandReply(text, username, post = {}) {
+    const order = parseOrder(text, this.bot.botUsername);
+    if (order) return this.executeOrder(order, username, post);
+
     const command = text.replace(new RegExp(`@${this.bot.botUsername}\\b`, "ig"), "").trim().toLowerCase();
     if (/^portfolio\b/.test(command)) {
+      // Paper book first: anyone who has traded through the bot gets their
+      // simulated holdings back on ask.
+      if (post.author_id && this.store.getPaperBook) {
+        const book = await this.store.getPaperBook(this.bot.botUsername, String(post.author_id));
+        const summary = describeBook(book);
+        if (summary) return summary;
+      }
       const user = await this.store.getUser(this.bot.botUsername, username);
       if (user?.publicSharing && user.portfolio) {
-        const summary = publicSummary(user);
-        return `@${username} ${summary}${user.portfolio.hideValues ? "" : ` · $${formatMoney(user.portfolio.totalValueUsd)}`}\n${this.publicBaseUrl}/p/${encodeURIComponent(this.bot.botUsername)}/${encodeURIComponent(username)}`;
+        return `${publicSummary(user)}${user.portfolio.hideValues ? "" : ` · $${formatMoney(user.portfolio.totalValueUsd)}`}`;
       }
-      return `@${username} Set up your opt-in public portfolio: ${this.publicBaseUrl}/setup`;
+      return `No positions yet. Ask me a thesis, then reply CONFIRM to start a paper book.`;
     }
-    if (/^(buy|sell|swap|trade)\b/.test(command)) {
-      return `@${username} I never execute trades from public posts. Create and review a private order confirmation instead.`;
+    // A reply that confirms a basket the bot proposed earlier.
+    const confirmed = await this.confirmedBasket(post);
+    if (confirmed) return this.executeBasket(confirmed, username, post);
+
+    // Anything else is a free-form question or thesis for the answering model.
+    if (this.answerer()) return this.agentReply(command || text, username, post);
+    if (looksLikeTrade(command)) {
+      return `I couldn’t read that as an order. Use “buy 5 AAPL” or “buy $500 of AAPL”.`;
     }
-    return `@${username} Try “portfolio” to share an opt-in public portfolio. Trading requests always require private confirmation.`;
+    return `Try “portfolio” for an opt-in public portfolio, or “buy 5 AAPL” if you’re authorized to trade.`;
   }
+
+  // Resolves the basket attached to whichever post this one replies to.
+  async confirmedBasket(post) {
+    if (!/\b(confirm|yes|do it|send it|buy them|lfg)\b/i.test(post.text ?? "")) return null;
+    const parents = (post.referenced_tweets ?? []).filter((ref) => ref.type === "replied_to");
+    for (const parent of parents) {
+      const basket = await this.store.getPendingBasket(this.bot.botUsername, parent.id);
+      if (basket) return { ...basket, proposalId: parent.id };
+    }
+    return null;
+  }
+
+  async agentReply(question, username, post) {
+    try {
+      const answer = await this.answerer().ask(question);
+      const text = fitForPost(answer.text || "No read on that one.");
+      // Only an authorized trader gets an actionable basket; everyone else
+      // gets the analysis without a buy button.
+      const symbols = this.limits?.authorizes(post.author_id) ? extractSymbols(answer.text) : [];
+      if (symbols.length === 0 || !this.broker) return text;
+
+      const perSymbolUsd = Math.floor((this.limits.maxOrderUsd / symbols.length) * 100) / 100;
+      const basket = { symbols, perSymbolUsd, authorId: String(post.author_id) };
+      this.pendingBasket = basket;
+      return fitForPost(`${text}\n\n${symbols.join(", ")} · $${perSymbolUsd} each. Reply CONFIRM to buy.`);
+    } catch (error) {
+      this.logger.warn("Agent turn failed", error.message);
+      return `Can’t reach my research backend right now.`;
+    }
+  }
+
+  async executeBasket(basket, username, post) {
+    if (String(post.author_id) !== basket.authorId) {
+      return `Only the person who asked can confirm that basket.`;
+    }
+    if (!this.limits?.authorizes(post.author_id) || !this.broker) {
+      return `Trading isn’t enabled on this bot.`;
+    }
+    if (post.id && !(await this.store.claimOrder(this.bot.botUsername, post.id))) return null;
+
+    const day = new Date().toISOString().slice(0, 10);
+    const filled = [];
+    const failed = [];
+    for (const symbol of basket.symbols) {
+      const spentTodayUsd = await this.store.getSpend(this.bot.botUsername, day);
+      const order = { side: "buy", symbol, notionalUsd: basket.perSymbolUsd };
+      const verdict = this.limits.check(order, { spentTodayUsd });
+      if (!verdict.ok) {
+        failed.push(`${symbol} (${verdict.reason})`);
+        continue;
+      }
+      try {
+        await this.broker.placeOrder({ ...order, userId: String(post.author_id) });
+        await this.store.recordSpend(this.bot.botUsername, day, verdict.estimatedUsd);
+        filled.push(symbol);
+      } catch (error) {
+        failed.push(`${symbol} (${String(error.message).slice(0, 40)})`);
+      }
+    }
+    await this.store.clearPendingBasket(this.bot.botUsername, basket.proposalId);
+    const parts = [];
+    if (filled.length) parts.push(`Bought $${basket.perSymbolUsd} each of ${filled.join(", ")}.`);
+    if (failed.length) parts.push(`Skipped ${failed.join("; ")}.`);
+    return fitForPost(parts.join(" ") || "Nothing to buy.");
+  }
+
+  // Trading is single-account: it moves the operator's own money, so an
+  // unauthorized author must never reach the broker.
+  async executeOrder(order, username, post) {
+    if (!this.broker || !this.limits) {
+      return `Trading isn’t enabled on this bot.`;
+    }
+    if (!this.limits.authorizes(post.author_id)) {
+      return `You’re not authorized to place orders with this bot.`;
+    }
+    // Claim before touching the broker: if the reply later fails, the retry
+    // must not place a second order.
+    if (post.id && !(await this.store.claimOrder(this.bot.botUsername, post.id))) return null;
+
+    const day = new Date().toISOString().slice(0, 10);
+    const spentTodayUsd = await this.store.getSpend(this.bot.botUsername, day);
+    const estimatedUsd = order.notionalUsd ?? (await this.estimateCost(order));
+    const verdict = this.limits.check(order, { spentTodayUsd, estimatedUsd });
+    if (!verdict.ok) {
+      return `Order blocked: ${verdict.reason}.`;
+    }
+
+    const summary = order.notionalUsd
+      ? `$${order.notionalUsd} of ${order.symbol}`
+      : `${order.quantity} ${order.symbol}`;
+    if (this.bot.dryRun) {
+      return `[dry run] would ${order.side} ${summary}.`;
+    }
+
+    try {
+      const result = await this.broker.placeOrder({ ...order, userId: String(post.author_id) });
+      if (order.side === "buy") {
+        await this.store.recordSpend(this.bot.botUsername, day, verdict.estimatedUsd);
+      }
+      const verb = result.structured?.paper
+        ? (order.side === "buy" ? "paper-bought" : "paper-sold")
+        : (order.side === "buy" ? "bought" : "sold");
+      this.logger.info(`Placed ${order.side} ${summary} for @${username} (post ${post.id})`, result.text);
+      return `Done — ${verb} ${summary}. ${result.text.slice(0, 120)}`.trim();
+    } catch (error) {
+      this.logger.error(`Order failed for post ${post.id}`, error);
+      return `Order failed: ${String(error.message).slice(0, 150)}`;
+    }
+  }
+
+  // Returns undefined when no price is available, which makes RiskLimits refuse
+  // the order rather than let an unpriced buy through the caps.
+  async estimateCost(order) {
+    if (!order.quantity) return undefined;
+    try {
+      const quote = await this.broker.call("quote", { symbol: order.symbol });
+      const price = priceFrom(quote);
+      return price === undefined ? undefined : price * order.quantity;
+    } catch (error) {
+      this.logger.warn(`Could not price ${order.symbol}`, error.message);
+      return undefined;
+    }
+  }
+}
+
+function priceFrom(quote) {
+  const candidate = quote.structured ?? {};
+  for (const key of ["price", "last_price", "lastPrice", "ask_price", "mark_price"]) {
+    const value = Number(candidate[key]);
+    if (Number.isFinite(value) && value > 0) return value;
+  }
+  const match = String(quote.text ?? "").match(/\$?\s*([\d,]+\.\d{2})\b/);
+  if (!match) return undefined;
+  const value = Number(match[1].replace(/,/g, ""));
+  return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
 function formatMoney(value) {

@@ -11,8 +11,62 @@ export function loadConfig() {
     publicBaseUrl: (process.env.PUBLIC_BASE_URL ?? `http://localhost:${port}`).replace(/\/$/, ""),
     dataFile: path.resolve(process.env.DATA_FILE ?? "./data/store.json"),
     adminApiKey: process.env.ADMIN_API_KEY ?? "",
+    // App-only bearer. Cannot post or read mentions in user context, but it is
+    // exactly what the filtered stream and webhook management endpoints want.
+    appBearerToken: process.env.X_APP_BEARER_TOKEN ?? "",
     databaseUrl: process.env.DATABASE_URL ?? "",
-    bots: loadBots()
+    bots: loadBots(),
+    trading: loadTrading(),
+    insiders: {
+      baseUrl: process.env.AGENT_BASE_URL ?? "https://agent.insiders.bot",
+      jwtSecret: process.env.INSIDERS_JWT_SECRET ?? "",
+      userId: process.env.INSIDERS_USER_ID ?? "",
+      // Every agent turn burns credits, so free-form answers are opt-in.
+      enabled: process.env.INSIDERS_ENABLED === "true"
+    },
+    llm: {
+      enabled: process.env.LLM_ENABLED === "true",
+      baseUrl: process.env.LLM_BASE_URL ?? "https://api.deepseek.com",
+      apiKey: process.env.LLM_API_KEY ?? "",
+      model: process.env.LLM_MODEL_NAME ?? process.env.DEEPSEEK_MODEL ?? "deepseek-v4-pro"
+    }
+  };
+}
+
+function loadTrading() {
+  const enabled = process.env.TRADING_ENABLED === "true";
+  // Paper unless the operator explicitly asks for live: simulated fills are
+  // the default failure mode, not real money.
+  const mode = process.env.TRADING_MODE === "live" ? "live" : "paper";
+  const allowedAuthorIds = (process.env.X_TRADE_AUTHOR_IDS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const maxOrderUsd = Number(process.env.MAX_ORDER_USD ?? 100);
+  const dailyMaxUsd = Number(process.env.DAILY_MAX_USD ?? 500);
+  if (!Number.isFinite(maxOrderUsd) || maxOrderUsd <= 0) throw new Error("MAX_ORDER_USD must be a positive number");
+  if (!Number.isFinite(dailyMaxUsd) || dailyMaxUsd <= 0) throw new Error("DAILY_MAX_USD must be a positive number");
+  // An empty allowlist with trading on would let any stranger spend the
+  // operator's money, so it is refused at startup rather than at runtime.
+  if (enabled && allowedAuthorIds.length === 0) {
+    throw new Error("TRADING_ENABLED=true requires X_TRADE_AUTHOR_IDS with at least one numeric X user ID");
+  }
+  return {
+    enabled,
+    mode,
+    allowedAuthorIds,
+    maxOrderUsd,
+    dailyMaxUsd,
+    tokenFile: path.resolve(process.env.ROBINHOOD_TOKEN_FILE ?? "./data/robinhood-tokens.json"),
+    callbackPort: Number(process.env.ROBINHOOD_CALLBACK_PORT ?? 41999),
+    clientId: process.env.ROBINHOOD_CLIENT_ID ?? "",
+    clientSecret: process.env.ROBINHOOD_CLIENT_SECRET ?? "",
+    toolOverrides: {
+      placeOrder: process.env.ROBINHOOD_TOOL_PLACEORDER ?? "",
+      quote: process.env.ROBINHOOD_TOOL_QUOTE ?? "",
+      positions: process.env.ROBINHOOD_TOOL_POSITIONS ?? "",
+      account: process.env.ROBINHOOD_TOOL_ACCOUNT ?? ""
+    }
   };
 }
 
@@ -32,13 +86,44 @@ function loadBots() {
   const usernames = new Set();
   return configuredBots.map((bot) => {
     const botUsername = String(bot.botUsername ?? bot.username ?? "").replace(/^@/, "").toLowerCase();
-    const botUserId = String(bot.botUserId ?? bot.userId ?? "");
     const userAccessToken = String(bot.userAccessToken ?? "");
+    const oauth1 = loadOauth1(bot);
+    const botUserId = resolveBotUserId(String(bot.botUserId ?? bot.userId ?? ""), oauth1, botUsername);
     if (!/^[a-z0-9_]{1,15}$/.test(botUsername)) throw new Error("Each bot username must be a valid X username");
     if (usernames.has(botUsername)) throw new Error(`Duplicate bot username: ${botUsername}`);
     usernames.add(botUsername);
-    return { botUsername, botUserId, userAccessToken, pollIntervalMs, dryRun };
+    return { botUsername, botUserId, userAccessToken, oauth1, pollIntervalMs, dryRun };
   });
+}
+
+// An OAuth 1.0a access token is prefixed with the numeric ID of the account
+// that authorized it, so the bot's user ID never has to be configured by hand.
+// Configuring it separately only creates a way for the two to disagree, which
+// would silently poll one account's mentions while replying as another.
+function resolveBotUserId(configured, oauth1, botUsername) {
+  const fromToken = oauth1?.accessToken.match(/^(\d+)-/)?.[1] ?? "";
+  if (configured && fromToken && configured !== fromToken) {
+    throw new Error(
+      `X_BOT_USER_ID (${configured}) does not match the account that owns X_ACCESS_TOKEN (${fromToken}). ` +
+      `The token belongs to a different account than @${botUsername}; replies would come from the wrong handle.`
+    );
+  }
+  return configured || fromToken;
+}
+
+// All four values must be present together; a partial set is a misconfiguration
+// that would otherwise fail as an opaque 401 from X.
+function loadOauth1(bot) {
+  const credentials = {
+    consumerKey: bot.consumerKey ?? process.env.X_CONSUMER_KEY ?? "",
+    consumerSecret: bot.consumerSecret ?? process.env.X_CONSUMER_SECRET ?? "",
+    accessToken: bot.accessToken ?? process.env.X_ACCESS_TOKEN ?? "",
+    accessTokenSecret: bot.accessTokenSecret ?? process.env.X_ACCESS_TOKEN_SECRET ?? ""
+  };
+  const present = Object.values(credentials).filter(Boolean).length;
+  if (present === 0) return null;
+  if (present < 4) throw new Error("OAuth 1.0a needs consumer key, consumer secret, access token, and access token secret");
+  return credentials;
 }
 
 function parseBots(value) {

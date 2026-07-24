@@ -6,11 +6,51 @@ import { normalizePortfolio } from "./portfolio.js";
 import { Store } from "./store.js";
 import { PostgresStore } from "./postgres-store.js";
 import { XClient } from "./x-client.js";
+import { RobinhoodAuthProvider } from "./robinhood-auth.js";
+import { RobinhoodClient } from "./robinhood.js";
+import { RiskLimits } from "./trading.js";
+import { crcResponse, extractMentions, verifySignature } from "./webhook.js";
+import { InsidersClient } from "./insiders.js";
+import { LlmClient } from "./llm.js";
+import { PaperBroker } from "./paper-broker.js";
+import { MentionStream } from "./stream.js";
 
 const config = loadConfig();
 const store = config.databaseUrl ? new PostgresStore(config.databaseUrl) : new Store(config.dataFile);
 await store.load();
-const workers = config.bots.map((bot) => new MentionWorker({ store, client: new XClient(bot), bot, publicBaseUrl: config.publicBaseUrl }));
+
+// The client connects lazily, so it is safe to construct even with trading off:
+// the LLM still needs its read-only quote/positions tools. `limits` is what
+// gates order placement, and stays null unless trading is explicitly enabled.
+const robinhood = new RobinhoodClient({
+  authProvider: new RobinhoodAuthProvider(config.trading),
+  toolOverrides: config.trading.toolOverrides
+});
+// In paper mode the worker trades against a simulator that prices fills from
+// live Robinhood quotes when available. TRADING_MODE=live is the only path to
+// real orders.
+const broker = config.trading.mode === "live"
+  ? robinhood
+  : new PaperBroker({ store, botUsername: config.bots[0].botUsername, quoteSource: robinhood });
+const limits = config.trading.enabled ? new RiskLimits(config.trading) : null;
+
+const insiders = config.insiders.enabled ? new InsidersClient(config.insiders) : null;
+if (config.insiders.enabled && !insiders.configured()) {
+  throw new Error("INSIDERS_ENABLED=true requires INSIDERS_JWT_SECRET and INSIDERS_USER_ID");
+}
+
+const llm = config.llm.enabled ? new LlmClient({ ...config.llm, broker: robinhood }) : null;
+if (config.llm.enabled && !llm.configured()) throw new Error("LLM_ENABLED=true requires LLM_API_KEY");
+
+const workers = config.bots.map((bot) => new MentionWorker({
+  store,
+  client: new XClient(bot),
+  bot,
+  broker,
+  limits,
+  insiders,
+  llm
+}));
 
 const server = createServer(async (request, response) => {
   try {
@@ -21,13 +61,21 @@ const server = createServer(async (request, response) => {
   }
 });
 
+// Filtered stream: X pushes mentions in ~1s over an outbound connection, so it
+// needs no public URL. Polling stays on as a backstop; claimMention dedupes.
+const stream = config.appBearerToken && workers[0]?.client.configured()
+  ? new MentionStream({ bearerToken: config.appBearerToken, worker: workers[0] })
+  : null;
+
 server.listen(config.port, () => {
   console.info(`xbot listening on ${config.publicBaseUrl}`);
   workers.forEach((worker) => worker.start());
+  stream?.start();
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
+    stream?.stop();
     workers.forEach((worker) => worker.stop());
     server.close(async () => {
       await store.close?.();
@@ -38,12 +86,55 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 async function route(request, response) {
   const url = new URL(request.url, config.publicBaseUrl);
-  if (request.method === "GET" && url.pathname === "/health") return sendJson(response, 200, { ok: true, database: config.databaseUrl ? "postgres" : "json", bots: config.bots.map((bot, index) => ({ username: bot.botUsername, xPolling: workers[index].client.configured(), dryRun: bot.dryRun })) });
+  if (request.method === "GET" && url.pathname === "/health") return sendJson(response, 200, { ok: true, database: config.databaseUrl ? "postgres" : "json", trading: { enabled: config.trading.enabled, maxOrderUsd: config.trading.maxOrderUsd, dailyMaxUsd: config.trading.dailyMaxUsd, authorizedTraders: config.trading.allowedAuthorIds.length }, bots: config.bots.map((bot, index) => ({ username: bot.botUsername, xPolling: workers[index].client.configured(), dryRun: bot.dryRun })) });
+  if (url.pathname === "/webhooks/x") return xWebhook(request, response, url);
   if (request.method === "GET" && url.pathname === "/setup") return sendHtml(response, 200, setupPage());
   if (request.method === "GET" && url.pathname.startsWith("/p/")) return publicPortfolio(response, url.pathname);
   if (request.method === "POST" && url.pathname.startsWith("/api/bots/") && url.pathname.endsWith("/users")) return provisionUser(request, response, routeParts(url.pathname, 4)[2]);
   if (request.method === "PUT" && url.pathname.startsWith("/api/bots/") && url.pathname.includes("/users/")) return updateUser(request, response, routeParts(url.pathname, 6)[2], routeParts(url.pathname, 6)[4]);
   sendJson(response, 404, { error: "Not found" });
+}
+
+// Webhook delivery replaces polling: X pushes each mention instead of the bot
+// asking every interval. Events run through the same worker as polling, so the
+// allowlist, caps, and exactly-once claim apply identically.
+async function xWebhook(request, response, url) {
+  const secret = config.bots[0]?.oauth1?.consumerSecret;
+  if (!secret) return sendJson(response, 503, { error: "Webhook needs X_CONSUMER_SECRET" });
+
+  if (request.method === "GET") {
+    const crcToken = url.searchParams.get("crc_token");
+    if (!crcToken) return sendJson(response, 400, { error: "Missing crc_token" });
+    return sendJson(response, 200, crcResponse(crcToken, secret));
+  }
+  if (request.method !== "POST") return sendJson(response, 405, { error: "Method not allowed" });
+
+  const rawBody = await readRaw(request);
+  if (!verifySignature(rawBody, request.headers["x-twitter-webhooks-signature"], secret)) {
+    return sendJson(response, 403, { error: "Invalid signature" });
+  }
+  // Acknowledge before processing: X expects a fast 200 and will retry on delay.
+  sendJson(response, 200, { ok: true });
+
+  let payload;
+  try { payload = JSON.parse(rawBody); } catch { return; }
+  const mentions = extractMentions(payload);
+  if (mentions.length === 0) {
+    console.info("Webhook event contained no mentions", Object.keys(payload ?? {}).join(", "));
+    return;
+  }
+  for (const mention of mentions) {
+    await workers[0].handleMention(mention).catch((error) => console.error("Webhook mention failed", error));
+  }
+}
+
+async function readRaw(request) {
+  let body = "";
+  for await (const chunk of request) {
+    body += chunk;
+    if (body.length > 1_000_000) throw httpError(413, "Webhook body too large");
+  }
+  return body;
 }
 
 async function provisionUser(request, response, rawBotUsername) {

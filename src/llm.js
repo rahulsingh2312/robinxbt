@@ -1,0 +1,138 @@
+// DeepSeek speaks the OpenAI chat-completions dialect, so this is a thin
+// client rather than an SDK dependency. It runs a tool-calling loop where the
+// tools are backed by the Robinhood MCP connection.
+const SYSTEM_PROMPT = `You are a stock-market bot replying on X (Twitter).
+
+Rules:
+- Reply in under 240 characters. One or two sentences. No hashtags, no emoji spam, no links.
+- Dry, confident, a little witty. Never breathless. Never hype.
+- ALWAYS ground claims in tool data. Call the tools to get real prices before quoting a number.
+- X allows only ONE cashtag per post. Cash-tag at most your single top pick ($NVDA); write every other ticker as plain text (AMD, AVGO).
+- If you genuinely cannot get data, say so plainly in one short sentence.
+- You are not a financial adviser and you never claim certainty about the future.`;
+
+// Without a Robinhood connection there are no tools, and the model's price
+// knowledge is stale training data. Stating those as current is the worst
+// failure mode available, so the no-data case gets its own instruction.
+const NO_DATA_PROMPT = `
+You currently have NO live market data connection.
+- NEVER state a specific price, quote, percentage move, or market cap. You do not know them.
+- Do not guess or recall numbers from memory. They are months out of date and would be wrong.
+- Answer qualitatively: the business, the sector, the risk, the thesis.
+- If asked point-blank for a price, say you can't pull live quotes right now, in one short clause.
+- You may still name tickers you find interesting as cash-tags.`;
+
+// The model gets every MCP tool EXCEPT mutations. A trade only ever happens
+// through the explicit confirm flow, so no generated text can move money on
+// its own — but everything readable (quotes, positions, balances, history,
+// watchlists, search) is fair game for grounding a reply.
+const WRITE_TOOL = /order|buy|sell|trade|transfer|deposit|withdraw|cancel|replace|modify|update|delete|remove|add|create|set_/i;
+
+export class LlmClient {
+  constructor({ baseUrl, apiKey, model, reasoningEffort = "low", broker = null, maxToolRounds = 4, timeoutMs = 60_000, logger = console }) {
+    this.baseUrl = (baseUrl ?? "https://api.deepseek.com").replace(/\/$/, "");
+    this.apiKey = apiKey;
+    this.model = model ?? "deepseek-v4-pro";
+    // deepseek-v4-pro is a reasoning model: `low` keeps latency and token spend
+    // down for what is only ever a one-tweet answer. Valid values are
+    // low | medium | high | xhigh | max.
+    this.reasoningEffort = reasoningEffort;
+    this.broker = broker;
+    this.maxToolRounds = maxToolRounds;
+    this.timeoutMs = timeoutMs;
+    this.logger = logger;
+  }
+
+  configured() {
+    return Boolean(this.apiKey);
+  }
+
+  // Exposes every read-only Robinhood MCP tool in OpenAI function-calling
+  // shape, discovered live so a Robinhood rename does not need a code change.
+  async tools() {
+    if (!this.broker) return [];
+    if (this.toolCache) return this.toolCache;
+    const available = await this.broker.listTools().catch(() => []);
+    this.toolCache = available
+      .filter((tool) => !WRITE_TOOL.test(tool.name))
+      .map((tool) => ({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description?.slice(0, 300) ?? `Robinhood ${tool.name}`,
+          parameters: tool.inputSchema ?? { type: "object", properties: {} }
+        }
+      }));
+    this.readNames = new Set(this.toolCache.map((tool) => tool.function.name));
+    return this.toolCache;
+  }
+
+  async ask(question) {
+    const tools = await this.tools();
+    const messages = [
+      { role: "system", content: tools.length > 0 ? SYSTEM_PROMPT : SYSTEM_PROMPT + NO_DATA_PROMPT },
+      { role: "user", content: question }
+    ];
+
+    for (let round = 0; round <= this.maxToolRounds; round += 1) {
+      const message = await this.complete(messages, round < this.maxToolRounds ? tools : []);
+      messages.push(message);
+      const calls = message.tool_calls ?? [];
+      if (calls.length === 0) return { text: (message.content ?? "").trim(), rounds: round };
+
+      for (const call of calls) {
+        const result = await this.runTool(call);
+        messages.push({ role: "tool", tool_call_id: call.id, content: result });
+      }
+    }
+    // Loop exhausted without a plain answer.
+    return { text: "", rounds: this.maxToolRounds };
+  }
+
+  async runTool(call) {
+    const name = call.function?.name;
+    // The denylist is enforced at execution too, not just at advertisement:
+    // a model hallucinating a write tool name gets an error, not an order.
+    if (!this.readNames?.has(name) || WRITE_TOOL.test(name)) return `Error: ${name} is not available.`;
+    let args = {};
+    try { args = JSON.parse(call.function.arguments || "{}"); } catch { /* keep empty */ }
+    try {
+      const result = await this.broker.callByName(name, args);
+      return (result.structured ? JSON.stringify(result.structured) : result.text || "").slice(0, 4000) || "No data.";
+    } catch (error) {
+      this.logger.warn(`Tool ${name} failed`, error.message);
+      return `Error: ${String(error.message).slice(0, 200)}`;
+    }
+  }
+
+  async complete(messages, tools) {
+    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: this.model,
+        messages,
+        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
+        // Reasoning tokens are drawn from this same budget. 400 was enough for
+        // the model to think and then run out before writing anything, which
+        // returns an empty string with finish_reason "length".
+        max_tokens: 2000,
+        reasoning_effort: this.reasoningEffort,
+        temperature: 0.7
+      }),
+      signal: AbortSignal.timeout(this.timeoutMs)
+    });
+    if (!response.ok) throw new Error(`LLM ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    const body = await response.json();
+    const choice = body.choices?.[0];
+    if (!choice?.message) throw new Error("LLM returned no message");
+    // Truncation mid-reasoning yields empty content and no tool calls, which
+    // would otherwise surface as a silently blank reply.
+    if (choice.finish_reason === "length" && !choice.message.content && !choice.message.tool_calls?.length) {
+      throw new Error("LLM ran out of tokens before answering");
+    }
+    // reasoning_content must not be echoed back as an assistant message.
+    const { reasoning_content: _reasoning, ...message } = choice.message;
+    return message;
+  }
+}

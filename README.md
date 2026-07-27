@@ -243,4 +243,31 @@ still only acted on once.
 Add rate limiting, audit logging, and alerting on every placed order. Consider
 adding a confirmation step: instant execution means a typo or a joke tweet
 becomes a filled order with no undo.
+## Persona: Gork
+
+`PERSONA=gork` swaps the answering voice for a parody rage-bait persona (think
+"Grok, but it's a jaded Robinhood cultist"). Infrastructure is unchanged —
+tools, spend caps, dry run, and the read-only tool filter all still apply; only
+the prompts and an optional unprompted-posting loop are new.
+
+```bash
+PERSONA=gork
+LLM_ENABLED=true          # the persona needs an answering model
+GORK_POSTING_ENABLED=true # unprompted posts, ~$0.015 each
+GORK_POST_MIN_MINUTES=120
+GORK_POST_MAX_MINUTES=360
+CORPUS_X_USER_ID=         # optional: numeric ID of the public figure to track
+```
+
+Unprompted posts pick a random seed direction every 2–6 hours (configurable)
+and respect `X_DRY_RUN`, so the whole persona can be reviewed in logs before it
+ever posts. The style corpus pulls the tracked account's recent posts as
+cadence reference; the prompt forbids verbatim copying and fabricated quotes.
+
+Non-negotiables baked into the prompt and covered by tests: the account
+presents itself as parody, no slurs or protected-class attacks, no self-harm
+content, no harassment of private individuals, no guaranteed-return claims.
+**Label the X account itself as parody** (name + bio) — X suspends unlabeled
+parody accounts under its impersonation policy, and no prompt can save the
+project from that.
 # robinxbt

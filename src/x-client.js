@@ -24,6 +24,17 @@ export class XClient {
     return this.read(response);
   }
 
+  // A standalone post on the bot's own timeline, not a reply.
+  async post(text) {
+    const url = `${API_URL}/tweets`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { ...this.headers("POST", url), "content-type": "application/json" },
+      body: JSON.stringify({ text })
+    });
+    return this.read(response);
+  }
+
   async reply(postId, text) {
     const url = `${API_URL}/tweets`;
     const response = await fetch(url, {

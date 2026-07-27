@@ -14,6 +14,9 @@ import { InsidersClient } from "./insiders.js";
 import { LlmClient } from "./llm.js";
 import { PaperBroker } from "./paper-broker.js";
 import { MentionStream } from "./stream.js";
+import { GORK_NO_DATA_PROMPT, GORK_POST_SEEDS, GORK_SYSTEM_PROMPT } from "./persona.js";
+import { Shitposter } from "./shitposter.js";
+import { StyleCorpus } from "./style-corpus.js";
 
 const config = loadConfig();
 const store = config.databaseUrl ? new PostgresStore(config.databaseUrl) : new Store(config.dataFile);
@@ -39,7 +42,21 @@ if (config.insiders.enabled && !insiders.configured()) {
   throw new Error("INSIDERS_ENABLED=true requires INSIDERS_JWT_SECRET and INSIDERS_USER_ID");
 }
 
-const llm = config.llm.enabled ? new LlmClient({ ...config.llm, broker: robinhood }) : null;
+// Gork swaps the LLM's voice and optionally tracks a real account's cadence;
+// everything else — tools, caps, dry run — is identical to the default bot.
+const gork = config.persona.name === "gork";
+const corpus = gork && config.persona.corpus.userId && config.appBearerToken
+  ? new StyleCorpus({ bearerToken: config.appBearerToken, ...config.persona.corpus })
+  : null;
+const llm = config.llm.enabled
+  ? new LlmClient({
+      ...config.llm,
+      broker: robinhood,
+      ...(gork
+        ? { systemPrompt: GORK_SYSTEM_PROMPT, noDataPrompt: GORK_NO_DATA_PROMPT, styleProvider: corpus ? () => corpus.block() : null }
+        : {})
+    })
+  : null;
 if (config.llm.enabled && !llm.configured()) throw new Error("LLM_ENABLED=true requires LLM_API_KEY");
 
 const workers = config.bots.map((bot) => new MentionWorker({
@@ -67,15 +84,32 @@ const stream = config.appBearerToken && workers[0]?.client.configured()
   ? new MentionStream({ bearerToken: config.appBearerToken, worker: workers[0] })
   : null;
 
+// Unprompted posting needs a voice and a mouth; without both it stays off
+// rather than half-working. Dry run is handled inside the poster itself.
+const shitposter = gork && config.persona.posting.enabled && llm?.configured() && workers[0]?.client.configured()
+  ? new Shitposter({
+      client: workers[0].client,
+      llm,
+      bot: config.bots[0],
+      seeds: GORK_POST_SEEDS,
+      ...config.persona.posting
+    })
+  : null;
+if (gork && config.persona.posting.enabled && !shitposter) {
+  console.warn("GORK_POSTING_ENABLED=true but posting is off: it needs LLM_ENABLED with an API key and a fully configured X bot.");
+}
+
 server.listen(config.port, () => {
-  console.info(`xbot listening on ${config.publicBaseUrl}`);
+  console.info(`xbot listening on ${config.publicBaseUrl}${gork ? " (persona: gork)" : ""}`);
   workers.forEach((worker) => worker.start());
   stream?.start();
+  shitposter?.start();
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     stream?.stop();
+    shitposter?.stop();
     workers.forEach((worker) => worker.stop());
     server.close(async () => {
       await store.close?.();

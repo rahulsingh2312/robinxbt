@@ -29,6 +29,36 @@ export function loadConfig() {
       baseUrl: process.env.LLM_BASE_URL ?? "https://api.deepseek.com",
       apiKey: process.env.LLM_API_KEY ?? "",
       model: process.env.LLM_MODEL_NAME ?? process.env.DEEPSEEK_MODEL ?? "deepseek-v4-pro"
+    },
+    persona: loadPersona()
+  };
+}
+
+function loadPersona() {
+  const name = (process.env.PERSONA ?? "default").toLowerCase();
+  if (!["default", "gork"].includes(name)) {
+    throw new Error(`PERSONA must be "default" or "gork", got "${name}"`);
+  }
+  const minMinutes = Number(process.env.GORK_POST_MIN_MINUTES ?? 120);
+  const maxMinutes = Number(process.env.GORK_POST_MAX_MINUTES ?? 360);
+  if (!Number.isFinite(minMinutes) || minMinutes < 1) throw new Error("GORK_POST_MIN_MINUTES must be at least 1");
+  if (!Number.isFinite(maxMinutes) || maxMinutes < minMinutes) {
+    throw new Error("GORK_POST_MAX_MINUTES must be >= GORK_POST_MIN_MINUTES");
+  }
+  return {
+    name,
+    posting: {
+      // Unprompted posts spend real money per post; opt-in like everything
+      // else that talks to the outside world.
+      enabled: process.env.GORK_POSTING_ENABLED === "true",
+      minIntervalMs: minMinutes * 60_000,
+      maxIntervalMs: maxMinutes * 60_000
+    },
+    corpus: {
+      // Numeric X user ID of the public figure whose voice the parody tracks.
+      userId: process.env.CORPUS_X_USER_ID ?? "",
+      maxPosts: Number(process.env.CORPUS_MAX_POSTS ?? 15),
+      refreshMs: Number(process.env.CORPUS_REFRESH_HOURS ?? 12) * 60 * 60 * 1000
     }
   };
 }

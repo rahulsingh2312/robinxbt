@@ -29,7 +29,7 @@ You currently have NO live market data connection.
 const WRITE_TOOL = /order|buy|sell|trade|transfer|deposit|withdraw|cancel|replace|modify|update|delete|remove|add|create|set_/i;
 
 export class LlmClient {
-  constructor({ baseUrl, apiKey, model, reasoningEffort = "low", broker = null, maxToolRounds = 4, timeoutMs = 60_000, logger = console }) {
+  constructor({ baseUrl, apiKey, model, reasoningEffort = "low", broker = null, maxToolRounds = 4, timeoutMs = 60_000, logger = console, systemPrompt = SYSTEM_PROMPT, noDataPrompt = NO_DATA_PROMPT, styleProvider = null }) {
     this.baseUrl = (baseUrl ?? "https://api.deepseek.com").replace(/\/$/, "");
     this.apiKey = apiKey;
     this.model = model ?? "deepseek-v4-pro";
@@ -41,6 +41,11 @@ export class LlmClient {
     this.maxToolRounds = maxToolRounds;
     this.timeoutMs = timeoutMs;
     this.logger = logger;
+    this.systemPrompt = systemPrompt;
+    this.noDataPrompt = noDataPrompt;
+    // Async () => string of extra system-prompt material (e.g. style examples
+    // scraped from a real account). Fetched per turn so it can stay fresh.
+    this.styleProvider = styleProvider;
   }
 
   configured() {
@@ -69,8 +74,11 @@ export class LlmClient {
 
   async ask(question) {
     const tools = await this.tools();
+    // A style-corpus failure must never take the reply down with it: the
+    // persona prompt alone is a complete instruction set.
+    const style = this.styleProvider ? await this.styleProvider().catch(() => "") : "";
     const messages = [
-      { role: "system", content: tools.length > 0 ? SYSTEM_PROMPT : SYSTEM_PROMPT + NO_DATA_PROMPT },
+      { role: "system", content: (tools.length > 0 ? this.systemPrompt : this.systemPrompt + this.noDataPrompt) + style },
       { role: "user", content: question }
     ];
 

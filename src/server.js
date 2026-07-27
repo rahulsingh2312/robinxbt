@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { loadConfig } from "./config.js";
 import { MentionWorker } from "./mention-worker.js";
@@ -31,10 +31,15 @@ const robinhood = new RobinhoodClient({
   authProvider: new RobinhoodAuthProvider(config.trading),
   toolOverrides: config.trading.toolOverrides
 });
-// Without a Robinhood session (no token file yet), free public quotes stand in
-// so the LLM still grounds its numbers and paper fills still price. Once
-// robinhood:login has run, the real client takes over on next restart.
-const robinhoodReady = existsSync(config.trading.tokenFile);
+// Without a Robinhood session, free public quotes stand in so the LLM still
+// grounds its numbers and paper fills still price. Once robinhood:login has
+// run, the real client takes over on next restart. A failed connect attempt
+// leaves a token file with client registration but no tokens, so presence of
+// the file alone proves nothing — only a stored token set does.
+const robinhoodReady = (() => {
+  try { return Boolean(JSON.parse(readFileSync(config.trading.tokenFile, "utf8")).tokens); }
+  catch { return false; }
+})();
 const quoteSource = robinhoodReady ? robinhood : new MarketData();
 if (!robinhoodReady) console.info("No Robinhood session; using free market data for quotes");
 // In paper mode the worker trades against a simulator that prices fills from

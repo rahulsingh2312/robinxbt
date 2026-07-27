@@ -28,7 +28,8 @@ export function loadConfig() {
       enabled: process.env.LLM_ENABLED === "true",
       baseUrl: process.env.LLM_BASE_URL ?? "https://api.deepseek.com",
       apiKey: process.env.LLM_API_KEY ?? "",
-      model: process.env.LLM_MODEL_NAME ?? process.env.DEEPSEEK_MODEL ?? "deepseek-v4-pro"
+      model: process.env.LLM_MODEL_NAME ?? process.env.DEEPSEEK_MODEL ?? "deepseek-v4-pro",
+      reasoningEffort: process.env.LLM_REASONING_EFFORT ?? "low"
     },
     persona: loadPersona()
   };

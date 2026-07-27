@@ -1,4 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { loadConfig } from "./config.js";
 import { MentionWorker } from "./mention-worker.js";
@@ -17,6 +18,7 @@ import { MentionStream } from "./stream.js";
 import { GORK_NO_DATA_PROMPT, GORK_POST_SEEDS, GORK_SYSTEM_PROMPT } from "./persona.js";
 import { Shitposter } from "./shitposter.js";
 import { StyleCorpus } from "./style-corpus.js";
+import { MarketData } from "./market-data.js";
 
 const config = loadConfig();
 const store = config.databaseUrl ? new PostgresStore(config.databaseUrl) : new Store(config.dataFile);
@@ -29,12 +31,18 @@ const robinhood = new RobinhoodClient({
   authProvider: new RobinhoodAuthProvider(config.trading),
   toolOverrides: config.trading.toolOverrides
 });
+// Without a Robinhood session (no token file yet), free public quotes stand in
+// so the LLM still grounds its numbers and paper fills still price. Once
+// robinhood:login has run, the real client takes over on next restart.
+const robinhoodReady = existsSync(config.trading.tokenFile);
+const quoteSource = robinhoodReady ? robinhood : new MarketData();
+if (!robinhoodReady) console.info("No Robinhood session; using free market data for quotes");
 // In paper mode the worker trades against a simulator that prices fills from
-// live Robinhood quotes when available. TRADING_MODE=live is the only path to
-// real orders.
+// live quotes when available. TRADING_MODE=live is the only path to real
+// orders.
 const broker = config.trading.mode === "live"
   ? robinhood
-  : new PaperBroker({ store, botUsername: config.bots[0].botUsername, quoteSource: robinhood });
+  : new PaperBroker({ store, botUsername: config.bots[0].botUsername, quoteSource });
 const limits = config.trading.enabled ? new RiskLimits(config.trading) : null;
 
 const insiders = config.insiders.enabled ? new InsidersClient(config.insiders) : null;
@@ -51,7 +59,7 @@ const corpus = gork && config.persona.corpus.userId && config.appBearerToken
 const llm = config.llm.enabled
   ? new LlmClient({
       ...config.llm,
-      broker: robinhood,
+      broker: quoteSource,
       ...(gork
         ? { systemPrompt: GORK_SYSTEM_PROMPT, noDataPrompt: GORK_NO_DATA_PROMPT, styleProvider: corpus ? () => corpus.block() : null }
         : {})

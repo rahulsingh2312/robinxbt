@@ -10,22 +10,23 @@ export default function Home() {
   const router = useRouter();
 
   return (
-    <main className="stack" style={{ gap: 36 }}>
-      <nav className="spread">
-        <a className="wordmark" href="/">peterpan<span>.</span></a>
-        <span className="pill live">ROBINHOOD CHAIN · LIVE</span>
+    <main>
+      <nav className="bar">
+        <a className="wordmark" href="/"><img src="/pfp-peterpan.jpg" alt="" />peterpan.</a>
+        <span className="pill"><span className="dot" />ROBINHOOD CHAIN · LIVE</span>
       </nav>
 
-      <header className="stack" style={{ gap: 12 }}>
+      <header className="hero">
         <p className="eyebrow">The bot that buys when you tell it to</p>
-        <h1>Talk trash. Get talked back. <em>Own the bag anyway.</em></h1>
-        <p className="muted" style={{ maxWidth: "56ch", margin: 0 }}>
+        <h1>Talk trash. Get talked back.<br /><em>Own the bag anyway.</em></h1>
+        <p className="sub">
           Mention the bot on X and it opens a wallet in your name on Robinhood
           Chain. Fund it with ETH or USDG, say “buy”, and tokenized stocks or
-          memecoins land in a wallet only you can claim — sell, withdraw, or
-          export the key any time, right here.
+          memecoins land in a wallet only you can claim.
         </p>
       </header>
+
+      <div className="divider"><span>One real conversation</span></div>
 
       <section className="thread" aria-label="Example conversation">
         <div className="tweet you">
@@ -58,25 +59,32 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="steps">
-        <div className="card">
-          <h2><span className="n">01</span>Talk</h2>
+      <div className="divider"><span>How it works</span></div>
+
+      <section className="steps-row">
+        <div>
+          <span className="n">01</span>
+          <h2>Talk</h2>
           <p>Mention @TryPeterpan. Ask for a read, get roasted, hear a ticker.</p>
         </div>
-        <div className="card">
-          <h2><span className="n">02</span>Fund</h2>
-          <p>Your wallet exists the moment you tweet. Top it up with ETH or USDG on Robinhood Chain.</p>
+        <div>
+          <span className="n">02</span>
+          <h2>Fund</h2>
+          <p>Your wallet exists the moment you tweet. Top it up with ETH or USDG.</p>
         </div>
-        <div className="card">
-          <h2><span className="n">03</span>Own</h2>
-          <p>Say “buy”. The fill lands on-chain in your wallet — not ours. Manage everything here.</p>
+        <div>
+          <span className="n">03</span>
+          <h2>Own</h2>
+          <p>Say “buy”. The fill lands on-chain in your wallet — not ours.</p>
         </div>
       </section>
 
-      <section className="card stack" style={{ gap: 12 }}>
-        <h2>Find your portfolio</h2>
+      <div className="divider"><span>Your portfolio</span></div>
+
+      <section className="hero" style={{ gap: 14 }}>
         <form
           className="row"
+          style={{ justifyContent: "center", width: "100%", maxWidth: 460 }}
           onSubmit={(event) => {
             event.preventDefault();
             const cleaned = handle.trim().replace(/^@/, "").toLowerCase();
@@ -90,12 +98,15 @@ export default function Home() {
             aria-label="X handle"
             style={{ flex: 1 }}
           />
-          <button type="submit">View portfolio</button>
+          <button type="submit">View</button>
         </form>
         <p className="fineprint" style={{ margin: 0 }}>
-          Buying only happens by talking to the bot on X. This site shows what you own and lets you manage it.
+          Buying only happens by talking to the bot on X. This site shows what you own and lets you manage it —
+          sell, withdraw, or export your key any time.
         </p>
       </section>
+
+      <div className="divider" aria-hidden="true"><span>· · ·</span></div>
 
       <p className="fineprint">
         Not investment advice; tokens can go to zero. Robinhood Stock Tokens are

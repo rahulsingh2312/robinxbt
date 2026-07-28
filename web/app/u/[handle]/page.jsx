@@ -34,15 +34,16 @@ export default function PortfolioPage({ params }) {
   }, [handle]);
 
   return (
-    <main className="stack" style={{ gap: 24 }}>
-      <nav className="spread">
-        <a className="wordmark" href="/">peterpan<span>.</span></a>
+    <main>
+      <nav className="bar">
+        <a className="wordmark" href="/"><img src="/pfp-peterpan.jpg" alt="" />peterpan.</a>
         <span className="pill">CHAIN ID 4663</span>
       </nav>
 
       {error ? (
-        <section className="card stack" style={{ gap: 8 }}>
-          <h1>@{handle}</h1>
+        <section className="hero" style={{ gap: 12 }}>
+          <Avatar handle={handle} />
+          <h1 style={{ fontSize: "1.8rem" }}>@{handle}</h1>
           <p className="muted" style={{ margin: 0 }}>{error}</p>
           <p style={{ margin: 0 }}>Mention @TryPeterpan on X and a wallet appears here on its own.</p>
         </section>
@@ -51,6 +52,8 @@ export default function PortfolioPage({ params }) {
       ) : (
         <Statement portfolio={portfolio} me={me} onChange={refresh} />
       )}
+
+      <div className="divider" aria-hidden="true"><span>· · ·</span></div>
 
       <p className="fineprint">
         Balances read live from Robinhood Chain. Buys happen only by talking to
@@ -61,13 +64,30 @@ export default function PortfolioPage({ params }) {
   );
 }
 
+// The user's live X profile picture; falls back to a monogram disc.
+function Avatar({ handle }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <div className="owner" aria-hidden="true">
+        <div style={{ width: 46, height: 46, borderRadius: 999, background: "var(--surface-2)", border: "1px solid var(--edge)", display: "grid", placeItems: "center", fontWeight: 650 }}>
+          {handle.slice(0, 1).toUpperCase()}
+        </div>
+      </div>
+    );
+  }
+  return <img src={`https://unavatar.io/x/${encodeURIComponent(handle)}`} alt="" onError={() => setFailed(true)} style={{ width: 46, height: 46, borderRadius: 999, border: "1px solid var(--edge)", background: "var(--surface-2)" }} />;
+}
+
 function LoadingStatement({ handle }) {
   return (
-    <section className="stack" style={{ gap: 16 }} aria-busy="true">
-      <h1>@{handle}</h1>
-      <div className="card stack" style={{ gap: 10 }}>
-        <div className="skeleton" style={{ width: "38%" }} />
-        <div className="skeleton" style={{ width: "62%", height: 40 }} />
+    <section className="stack" style={{ gap: 20 }} aria-busy="true">
+      <div className="owner">
+        <Avatar handle={handle} />
+        <div className="handle">@{handle}<small>ON-CHAIN PORTFOLIO</small></div>
+      </div>
+      <div className="statement">
+        <div className="skeleton" style={{ width: 220, height: 56, margin: "0 auto" }} />
       </div>
       <div className="card stack" style={{ gap: 10 }}>
         <div className="skeleton" style={{ width: "50%" }} />
@@ -80,30 +100,33 @@ function LoadingStatement({ handle }) {
 function Statement({ portfolio, me, onChange }) {
   const owns = me?.username === portfolio.username;
   return (
-    <>
-      <header className="spread">
-        <h1>@{portfolio.username}</h1>
+    <div className="stack" style={{ gap: 28 }}>
+      <div className="spread">
+        <div className="owner">
+          <Avatar handle={portfolio.username} />
+          <div className="handle">@{portfolio.username}<small>ON-CHAIN PORTFOLIO</small></div>
+        </div>
         {!owns && (
-          <a href={`/auth/x/login?return=/u/${encodeURIComponent(portfolio.username)}`}>
-            Your wallet? Sign in with X →
+          <a className="btn-quiet" href={`/auth/x/login?return=/u/${encodeURIComponent(portfolio.username)}`}>
+            Your wallet? Sign in with 𝕏
           </a>
         )}
-      </header>
+      </div>
 
-      <section className="card stack" style={{ gap: 6 }}>
-        <p className="eyebrow" style={{ margin: 0 }}>Total value</p>
+      <section className="statement">
+        <p className="eyebrow" style={{ margin: "0 0 10px" }}>Total value</p>
         <div className="total-figure">{usd(portfolio.totalUsd)}</div>
-        <p className="muted num" style={{ margin: 0, fontSize: "0.85rem" }}>
-          {qty(portfolio.eth.amount)} ETH · {portfolio.tokens.length} token{portfolio.tokens.length === 1 ? "" : "s"}
+        <p className="muted num under" style={{ fontSize: "0.82rem" }}>
+          {qty(portfolio.eth.amount)} ETH · {portfolio.tokens.length} token{portfolio.tokens.length === 1 ? "" : "s"} · live from chain
         </p>
       </section>
 
       <DepositCard address={portfolio.address} explorer={portfolio.explorer} />
 
-      <section className="card stack" style={{ gap: 4 }}>
-        <div className="spread">
+      <section className="card stack" style={{ gap: 6 }}>
+        <div className="spread" style={{ marginBottom: 8 }}>
           <h2>Holdings</h2>
-          <span className="pill">LIVE FROM CHAIN</span>
+          <span className="pill">LIVE</span>
         </div>
         <div className="table-scroll">
           <table>
@@ -135,7 +158,7 @@ function Statement({ portfolio, me, onChange }) {
       </section>
 
       {owns && <ManagePanel portfolio={portfolio} onChange={onChange} />}
-    </>
+    </div>
   );
 }
 
@@ -150,12 +173,12 @@ function DepositCard({ address, explorer }) {
   }, [address]);
 
   return (
-    <section className="card stack" style={{ gap: 12 }}>
+    <section className="card stack" style={{ gap: 14 }}>
       <div className="spread">
         <h2>Deposit</h2>
         <span className="pill">ETH OR USDG · ROBINHOOD CHAIN ONLY</span>
       </div>
-      <div className="row" style={{ alignItems: "flex-start", gap: 16 }}>
+      <div className="row" style={{ alignItems: "flex-start", gap: 18 }}>
         <div className="qr-box"><canvas ref={canvasRef} /></div>
         <div className="stack" style={{ gap: 10, flex: 1, minWidth: 220 }}>
           <div className="address">{address}</div>
@@ -169,7 +192,7 @@ function DepositCard({ address, explorer }) {
                 setTimeout(() => setCopied(false), 1500);
               }}
             >
-              {copied ? "Copied" : "Copy address"}
+              {copied ? "Copied ✓" : "Copy address"}
             </button>
             <a href={explorer} target="_blank" rel="noreferrer">Explorer ↗</a>
           </div>
@@ -209,7 +232,7 @@ function ManagePanel({ portfolio, onChange }) {
   const sellable = portfolio.tokens.filter((token) => token.amount > 0);
 
   return (
-    <section className="card stack" style={{ gap: 18 }}>
+    <section className="card stack" style={{ gap: 20 }}>
       <h2>Manage</h2>
 
       {sellable.length > 0 && (

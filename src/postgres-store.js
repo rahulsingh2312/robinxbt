@@ -181,6 +181,14 @@ export class PostgresStore {
     );
   }
 
+  async listWallets(botUsername) {
+    const result = await this.pool.query(
+      "SELECT author_id, data FROM xbot_wallets WHERE bot_username = $1",
+      [botUsername.toLowerCase()]
+    );
+    return result.rows.map((row) => ({ authorId: row.author_id, record: row.data }));
+  }
+
   async getWalletByUsername(botUsername, xUsername) {
     const result = await this.pool.query(
       `SELECT author_id, data FROM xbot_wallets

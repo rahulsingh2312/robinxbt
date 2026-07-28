@@ -39,13 +39,36 @@ export function loadConfig() {
 
 // Per-user custodial wallets on Robinhood Chain. Everything here is opt-in:
 // with ONCHAIN_ENABLED unset the bot behaves exactly as before.
+// A 64-char hex string can still be worthless as a key. Reject the shapes a
+// human actually produces by accident: repeated characters, all zeroes, or
+// too few distinct bytes to be random.
+function assertStrongHexKey(hex, name) {
+  const bytes = Buffer.from(hex, "hex");
+  const distinct = new Set(bytes).size;
+  if (distinct < 12) {
+    throw new Error(`${name} looks like a placeholder, not a random key (only ${distinct} distinct bytes). Generate one with \`openssl rand -hex 32\`.`);
+  }
+}
+
 function loadOnchain() {
   const enabled = process.env.ONCHAIN_ENABLED === "true";
   const walletEncKey = process.env.WALLET_ENC_KEY ?? "";
+  const previousWalletEncKey = process.env.WALLET_ENC_KEY_PREVIOUS ?? "";
+  const sessionSecret = process.env.SESSION_SECRET ?? "";
   // Refused at startup: generating wallets that cannot be encrypted, or
   // encrypting with a weak key, silently loses user money later.
   if (enabled && !/^[0-9a-fA-F]{64}$/.test(walletEncKey)) {
     throw new Error("ONCHAIN_ENABLED=true requires WALLET_ENC_KEY: 64 hex chars, e.g. from `openssl rand -hex 32`");
+  }
+  // Hex shape alone does not make a key: a doc placeholder like "aaaa…" is
+  // 64 valid characters and about 4 bits of entropy.
+  if (enabled) assertStrongHexKey(walletEncKey, "WALLET_ENC_KEY");
+  if (previousWalletEncKey) assertStrongHexKey(previousWalletEncKey, "WALLET_ENC_KEY_PREVIOUS");
+  // This secret alone gates key export, so a guessable one is equivalent to
+  // publishing every wallet. Unset is fine (it derives from the wallet key);
+  // set-but-weak is not.
+  if (enabled && sessionSecret && Buffer.from(sessionSecret, "utf8").length < 32) {
+    throw new Error("SESSION_SECRET must be at least 32 bytes; generate with `openssl rand -hex 32`, or leave it unset to derive one from WALLET_ENC_KEY");
   }
   const maxOrderUsd = Number(process.env.ONCHAIN_MAX_ORDER_USD ?? 100);
   const slippageBps = Number(process.env.ONCHAIN_SLIPPAGE_BPS ?? 100);
@@ -58,6 +81,7 @@ function loadOnchain() {
   return {
     enabled,
     walletEncKey,
+    previousWalletEncKey,
     rpcUrl: process.env.ROBINHOOD_CHAIN_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
     blockscoutBaseUrl: process.env.ROBINHOOD_CHAIN_EXPLORER ?? "https://robinhoodchain.blockscout.com",
     maxOrderUsd,
@@ -75,7 +99,7 @@ function loadOnchain() {
       clientId: process.env.X_CLIENT_ID ?? "",
       clientSecret: process.env.X_CLIENT_SECRET ?? ""
     },
-    sessionSecret: process.env.SESSION_SECRET ?? ""
+    sessionSecret
   };
 }
 

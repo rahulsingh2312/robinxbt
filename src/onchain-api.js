@@ -87,6 +87,11 @@ export class OnchainApi {
     }
     if (request.method === "GET" && pathname === "/auth/x/callback") { await this.callback(request, response, url); return true; }
     if (request.method === "POST" && pathname === "/auth/logout") {
+      // Clearing the browser's copy is not enough: a cookie already captured
+      // elsewhere would stay valid for its full lifetime. Bumping the stored
+      // epoch invalidates every session ever issued to this account.
+      const session = this.session(request);
+      if (session) await this.bumpSessionEpoch(session.authorId);
       setCookie(response, "xbot_session", "", 0, this.secureCookies);
       sendJson(response, 200, { ok: true });
       return true;
@@ -95,6 +100,33 @@ export class OnchainApi {
     if (request.method === "POST" && pathname === "/api/onchain/sell") { await this.sell(request, response); return true; }
     if (request.method === "POST" && pathname === "/api/onchain/export-key") { await this.exportKey(request, response); return true; }
     return false;
+  }
+
+  async bumpSessionEpoch(authorId) {
+    const wallet = await this.store.getWalletByAuthor(this.defaultBot, authorId);
+    if (!wallet) return;
+    wallet.sessionEpoch = (wallet.sessionEpoch ?? 0) + 1;
+    await this.store.setWallet(this.defaultBot, authorId, wallet);
+  }
+
+  // Sessions are stateless, so revocation rides on a counter stored with the
+  // wallet: a cookie minted before the last logout no longer matches.
+  async sessionEpochValid(session) {
+    const wallet = await this.store.getWalletByAuthor(this.defaultBot, session.authorId);
+    return (wallet?.sessionEpoch ?? 0) === (session.epoch ?? 0);
+  }
+
+  async authenticate(request, response) {
+    const session = this.session(request);
+    if (!session) {
+      sendJson(response, 401, { error: "Sign in with X first" });
+      return null;
+    }
+    if (!(await this.sessionEpochValid(session))) {
+      sendJson(response, 401, { error: "This session was signed out. Sign in with X again." });
+      return null;
+    }
+    return session;
   }
 
   async portfolio(response, rawUsername) {
@@ -121,7 +153,7 @@ export class OnchainApi {
 
   async me(request, response) {
     const session = this.session(request);
-    if (!session) return sendJson(response, 401, { error: "Not signed in" });
+    if (!session || !(await this.sessionEpochValid(session))) return sendJson(response, 401, { error: "Not signed in" });
     const wallet = await this.store.getWalletByAuthor(this.defaultBot, session.authorId);
     sendJson(response, 200, { authorId: session.authorId, username: session.username, address: wallet?.address ?? null });
   }
@@ -133,7 +165,7 @@ export class OnchainApi {
     const verifier = randomBytes(32).toString("base64url");
     const state = randomBytes(16).toString("base64url");
     const returnTo = safeReturnPath(url.searchParams.get("return"));
-    setCookie(response, "xbot_oauth", this.signValue(`${verifier}.${state}.${returnTo}`), 600, this.secureCookies);
+    setCookie(response, "xbot_oauth", this.signValue(`${verifier}.${state}.${returnTo}`, "oauth"), 600, this.secureCookies);
     const challenge = createHash("sha256").update(verifier).digest("base64url");
     const authorize = new URL("https://x.com/i/oauth2/authorize");
     authorize.search = new URLSearchParams({
@@ -150,7 +182,7 @@ export class OnchainApi {
   }
 
   async callback(request, response, url) {
-    const cookieValue = this.verifyValue(cookies(request).xbot_oauth ?? "");
+    const cookieValue = this.verifyValue(cookies(request).xbot_oauth ?? "", "oauth");
     const code = url.searchParams.get("code");
     if (!cookieValue || !code) return sendJson(response, 400, { error: "Sign-in expired, start again" });
     const [verifier, state, returnTo] = cookieValue.split(".");
@@ -181,7 +213,16 @@ export class OnchainApi {
     if (!meResponse.ok) return sendJson(response, 502, { error: "Could not read X profile" });
     const me = (await meResponse.json()).data;
 
-    const session = { authorId: String(me.id), username: me.username.toLowerCase(), iat: Date.now(), exp: Date.now() + 7 * 86_400_000 };
+    const wallet = await this.store.getWalletByAuthor(this.defaultBot, String(me.id));
+    const session = {
+      authorId: String(me.id),
+      username: me.username.toLowerCase(),
+      epoch: wallet?.sessionEpoch ?? 0,
+      iat: Date.now(),
+      // Short by design: this cookie can move money, and re-auth with X is
+      // one click for someone already logged in there.
+      exp: Date.now() + 24 * 3_600_000
+    };
     setCookie(response, "xbot_oauth", "", 0, this.secureCookies);
     setCookie(response, "xbot_session", this.signValue(Buffer.from(JSON.stringify(session)).toString("base64url")), 7 * 86_400, this.secureCookies);
     response.writeHead(302, { location: `${this.config.onchain.siteBaseUrl}${returnTo || `/u/${session.username}`}` });
@@ -191,8 +232,8 @@ export class OnchainApi {
   // --- Manage endpoints (session required) ----------------------------------
 
   async withdraw(request, response) {
-    const session = this.session(request);
-    if (!session) return sendJson(response, 401, { error: "Sign in with X first" });
+    const session = await this.authenticate(request, response);
+    if (!session) return;
     if (!this.guard(request, response, { limiter: this.limits.move, key: `w:${session.authorId}` })) return;
     const wallet = await this.store.getWalletByAuthor(this.defaultBot, session.authorId);
     if (!wallet) return sendJson(response, 404, { error: "No wallet for this account" });
@@ -202,8 +243,15 @@ export class OnchainApi {
     const asset = String(body.asset ?? "eth").toLowerCase();
     if (!/^0x[0-9a-fA-F]{40}$/.test(to)) return sendJson(response, 400, { error: "`to` must be a 0x address" });
     if (!Number.isFinite(amount) || amount <= 0) return sendJson(response, 400, { error: "`amount` must be positive" });
-    const signer = this.vault.signerFor(wallet, this.chain.provider);
+    // Addresses that swallow funds silently: the burn address, the token
+    // contract itself, and the wallet's own address (a no-op that still
+    // burns gas).
+    if (/^0x0{40}$/.test(to)) return sendJson(response, 400, { error: "That address would burn the funds." });
+    if (to.toLowerCase() === wallet.address.toLowerCase()) return sendJson(response, 400, { error: "That is this wallet's own address." });
+    if (asset !== "eth" && !/^0x[0-9a-fA-F]{40}$/.test(asset)) return sendJson(response, 400, { error: "`asset` must be \"eth\" or a token address" });
+    if (asset !== "eth" && to.toLowerCase() === asset.toLowerCase()) return sendJson(response, 400, { error: "Sending a token to its own contract would lose it." });
     try {
+      const signer = this.vault.signerFor(wallet, this.chain.provider);
       const receipt = asset === "eth"
         ? await this.chain.sendEth(signer, to, amount)
         : await this.chain.sendToken(signer, asset, to, amount);
@@ -217,8 +265,8 @@ export class OnchainApi {
   // Sells swap a token back to ETH through the same Uniswap v4 route
   // discovery the buys use, from the signed-in owner's wallet only.
   async sell(request, response) {
-    const session = this.session(request);
-    if (!session) return sendJson(response, 401, { error: "Sign in with X first" });
+    const session = await this.authenticate(request, response);
+    if (!session) return;
     if (!this.guard(request, response, { limiter: this.limits.move, key: `s:${session.authorId}` })) return;
     const wallet = await this.store.getWalletByAuthor(this.defaultBot, session.authorId);
     if (!wallet) return sendJson(response, 404, { error: "No wallet for this account" });
@@ -243,8 +291,8 @@ export class OnchainApi {
   // can exit at any time is the difference between a wallet service and a
   // trap. The site shows the appropriate warnings before calling this.
   async exportKey(request, response) {
-    const session = this.session(request);
-    if (!session) return sendJson(response, 401, { error: "Sign in with X first" });
+    const session = await this.authenticate(request, response);
+    if (!session) return;
     if (!this.guard(request, response, { limiter: this.limits.export, key: `k:${session.authorId}` })) return;
     // Handing over the key is irreversible, so a merely-valid session is not
     // enough: it has to be a session that was created minutes ago, which a
@@ -255,7 +303,12 @@ export class OnchainApi {
     const wallet = await this.store.getWalletByAuthor(this.defaultBot, session.authorId);
     if (!wallet) return sendJson(response, 404, { error: "No wallet for this account" });
     this.logger.info(`Private key exported by @${session.username} (${session.authorId})`);
-    sendJson(response, 200, { address: wallet.address, privateKey: this.vault.privateKeyOf(wallet) });
+    const privateKey = this.vault.privateKeyOf(wallet);
+    // Exporting is the end of the trusted session: invalidate it so the same
+    // cookie cannot be reused to export again later.
+    await this.bumpSessionEpoch(session.authorId);
+    setCookie(response, "xbot_session", "", 0, this.secureCookies);
+    sendJson(response, 200, { address: wallet.address, privateKey });
   }
 
   // --- Session plumbing ------------------------------------------------------
@@ -271,16 +324,19 @@ export class OnchainApi {
     }
   }
 
-  signValue(value) {
-    return `${value}.${createHmac("sha256", this.sessionSecret).update(value).digest("base64url")}`;
+  // The OAuth cookie and the session cookie are signed with the same secret,
+  // so each carries a context label. Without it, a value minted for one
+  // purpose could one day be replayed as the other.
+  signValue(value, context = "session") {
+    return `${value}.${createHmac("sha256", this.sessionSecret).update(`${context}:${value}`).digest("base64url")}`;
   }
 
-  verifyValue(signed) {
+  verifyValue(signed, context = "session") {
     if (!this.sessionSecret) return null;
     const at = signed.lastIndexOf(".");
     if (at < 1) return null;
     const value = signed.slice(0, at);
-    const expected = createHmac("sha256", this.sessionSecret).update(value).digest("base64url");
+    const expected = createHmac("sha256", this.sessionSecret).update(`${context}:${value}`).digest("base64url");
     const actual = signed.slice(at + 1);
     const expectedBuffer = Buffer.from(expected);
     const actualBuffer = Buffer.from(actual);

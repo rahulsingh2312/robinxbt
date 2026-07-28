@@ -296,6 +296,9 @@ a.btn-quiet {
   background: var(--surface); background-image: var(--card-sheen);
 }
 
+/* The network note trails the action buttons, pushed to the right edge. */
+.deposit-actions .warn-text { margin-left: auto; }
+
 /* Overlapping chain-asset chips on the deposit card. */
 .asset-cluster { display: inline-flex; align-items: center; }
 .asset-cluster > * {
@@ -389,7 +392,9 @@ a.btn-quiet {
   /* Deposit card on phones: buttons side by side, network note and the
      bot prompt centered under them. */
   .deposit-actions { justify-content: center; }
-  .deposit-actions .warn-text { flex-basis: 100%; text-align: center; }
+  .deposit-actions .warn-text { flex-basis: 100%; text-align: center; margin-left: 0; }
+  /* The export action sits beside two lines of label, so it stays compact. */
+  .manage-section .spread > button { padding: 9px 16px; font-size: 0.85rem; }
 
   .owner img { width: 40px; height: 40px; }
   .owner .handle { font-size: 1.15rem; }

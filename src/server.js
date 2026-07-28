@@ -92,7 +92,7 @@ if (config.llm.enabled && !llm.configured()) throw new Error("LLM_ENABLED=true r
 let onchain = null;
 let onchainApi = null;
 if (config.onchain.enabled) {
-  const vault = new WalletVault(config.onchain.walletEncKey);
+  const vault = new WalletVault(config.onchain.walletEncKey, config.onchain.previousWalletEncKey);
   const chain = new ChainClient({ rpcUrl: config.onchain.rpcUrl });
   const dex = new Dex({ provider: chain.provider, slippageBps: config.onchain.slippageBps });
   const resolver = new AssetResolver({ baseUrl: config.onchain.blockscoutBaseUrl });
@@ -174,7 +174,13 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 async function route(request, response) {
   const url = new URL(request.url, config.publicBaseUrl);
-  if (request.method === "GET" && url.pathname === "/health") return sendJson(response, 200, { ok: true, database: config.databaseUrl ? "postgres" : "json", trading: { enabled: config.trading.enabled, maxOrderUsd: config.trading.maxOrderUsd, dailyMaxUsd: config.trading.dailyMaxUsd, authorizedTraders: config.trading.allowedAuthorIds.length }, onchain: { enabled: config.onchain.enabled, signIn: Boolean(onchainApi?.oauthReady()), maxOrderUsd: config.onchain.maxOrderUsd }, bots: config.bots.map((bot, index) => ({ username: bot.botUsername, xPolling: workers[index].client.configured(), dryRun: bot.dryRun })) });
+    // Public liveness only. Configuration detail (caps, allowlist sizes, which
+  // integrations are wired) is reconnaissance for anyone probing the host, so
+  // it is available solely to the admin key.
+  if (request.method === "GET" && url.pathname === "/health") {
+    if (!isAdmin(request)) return sendJson(response, 200, { ok: true });
+    return sendJson(response, 200, { ok: true, database: config.databaseUrl ? "postgres" : "json", trading: { enabled: config.trading.enabled, maxOrderUsd: config.trading.maxOrderUsd, dailyMaxUsd: config.trading.dailyMaxUsd, authorizedTraders: config.trading.allowedAuthorIds.length }, onchain: { enabled: config.onchain.enabled, signIn: Boolean(onchainApi?.oauthReady()), maxOrderUsd: config.onchain.maxOrderUsd }, bots: config.bots.map((bot, index) => ({ username: bot.botUsername, xPolling: workers[index].client.configured(), dryRun: bot.dryRun })) });
+  }
   if (onchainApi && (await onchainApi.route(request, response, url))) return;
   if (url.pathname === "/webhooks/x") return xWebhook(request, response, url);
   if (request.method === "GET" && url.pathname === "/setup") return sendHtml(response, 200, setupPage());
@@ -279,7 +285,11 @@ function routeParts(pathname) {
 }
 
 function requireAdmin(request) {
-  if (!config.adminApiKey || !safeEqual(bearerToken(request), config.adminApiKey)) throw httpError(401, "Admin authorization required");
+  if (!isAdmin(request)) throw httpError(401, "Admin authorization required");
+}
+
+function isAdmin(request) {
+  return Boolean(config.adminApiKey) && safeEqual(bearerToken(request), config.adminApiKey);
 }
 
 function requireOwner(request, user) {

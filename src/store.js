@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, open as openFile, readFile, rename, unlink } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 
 const EMPTY_STORE = { users: {}, state: {} };
@@ -11,7 +12,9 @@ export class Store {
   }
 
   async load() {
-    await mkdir(dirname(this.file), { recursive: true });
+    // 0700: the directory holds encrypted wallet keys, so no other local
+    // account has any business listing or writing in it.
+    await mkdir(dirname(this.file), { recursive: true, mode: 0o700 });
     try {
       this.data = JSON.parse(await readFile(this.file, "utf8"));
       this.data.users ??= {};
@@ -25,9 +28,24 @@ export class Store {
   async save() {
     const content = JSON.stringify(this.data, null, 2);
     this.pendingWrite = this.pendingWrite.then(async () => {
-      const temporaryFile = `${this.file}.tmp`;
-      await writeFile(temporaryFile, content, { mode: 0o600 });
-      await rename(temporaryFile, this.file);
+      // "wx" fails if the path exists and never follows a symlink, so another
+      // local process cannot pre-create the temp file to capture wallet
+      // ciphertext at a mode or location of its choosing. The random suffix
+      // keeps the path unpredictable.
+      const temporaryFile = `${this.file}.${randomBytes(6).toString("hex")}.tmp`;
+      const handle = await openFile(temporaryFile, "wx", 0o600);
+      try {
+        await handle.writeFile(content);
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      try {
+        await rename(temporaryFile, this.file);
+      } catch (error) {
+        await unlink(temporaryFile).catch(() => {});
+        throw error;
+      }
     });
     return this.pendingWrite;
   }
@@ -129,6 +147,13 @@ export class Store {
     this.data.wallets[this.userKey(botUsername, authorId)] = record;
     if (record.xUsername) this.data.walletIndex[this.userKey(botUsername, record.xUsername)] = String(authorId);
     await this.save();
+  }
+
+  async listWallets(botUsername) {
+    const prefix = `${botUsername.toLowerCase()}:`;
+    return Object.entries(this.data.wallets ?? {})
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([key, record]) => ({ authorId: key.slice(prefix.length), record }));
   }
 
   async getWalletByUsername(botUsername, xUsername) {

@@ -3,6 +3,7 @@ import { looksLikeTrade, parseOrder } from "./trading.js";
 import { fitForPost, limitCashtags } from "./insiders.js";
 import { describeBook } from "./paper-broker.js";
 import { parseBuyIntent } from "./onchain-broker.js";
+import { redact } from "./http-guard.js";
 
 // Words that look like tickers but never are, so a basket is not built from
 // the agent's own prose.
@@ -409,7 +410,9 @@ function friendlyChainError(error) {
   if (/TooLittleReceived|V4TooLittle|slippage/i.test(message)) return "the price moved past my slippage guard. Try again.";
   if (/insufficient funds/i.test(message)) return "gas came up short. Top up a little ETH and retry.";
   if (/timeout|network|ECONN|429/i.test(message)) return "the chain RPC is being slow. Try again in a minute.";
-  return message.slice(0, 100);
+  // Anything unrecognized is echoed publicly, so it goes through the same
+  // redaction the logs use before being truncated.
+  return redact(message).slice(0, 100);
 }
 
 function priceFrom(quote) {

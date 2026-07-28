@@ -214,10 +214,10 @@ function DepositCard({ address, explorer }) {
               {copied ? "Copied ✓" : "Copy address"}
             </button>
             <a href={explorer} target="_blank" rel="noreferrer">Explorer ↗</a>
+            <span className="warn-text" style={{ fontSize: "0.7rem", lineHeight: 1.45, flex: 1, minWidth: 170 }}>
+              Robinhood Chain (4663) only. Other networks lose funds.
+            </span>
           </div>
-          <p className="warn-text" style={{ margin: 0 }}>
-            Send only on Robinhood Chain (chain id 4663). Funds sent on other networks are gone.
-          </p>
           <p style={{ margin: 0, fontSize: "0.88rem" }}>
             Funded? <a href="https://x.com/intent/post?text=%40TryPeterpan%20just%20funded%20my%20wallet%2C%20what%20should%20I%20buy%3F" target="_blank" rel="noreferrer">Tell the bot to buy ↗</a>
           </p>

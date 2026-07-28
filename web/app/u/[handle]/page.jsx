@@ -366,6 +366,9 @@ function ManagePanel({ portfolio, onChange }) {
                     const response = await fetch("/api/onchain/export-key", { method: "POST" });
                     const payload = await response.json();
                     if (response.ok) { setRevealed(payload.privateKey); setMessage(null); }
+                    // The server demands a recent sign-in before handing over
+                    // a key; send them back through X rather than dead-ending.
+                    else if (payload.reauth) { window.location.href = `/auth/x/login?return=/u/${encodeURIComponent(portfolio.username)}`; return; }
                     else setMessage(payload.error);
                     setConfirmingExport(false);
                   } finally {

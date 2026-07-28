@@ -82,6 +82,12 @@ export function redact(value) {
 }
 
 export function redactingLogger(base = console) {
-  const wrap = (level) => (...args) => base[level](...args.map((arg) => (typeof arg === "string" ? redact(arg) : arg)));
+  // Bound up front, because callers install the result back onto `console`.
+  // Reading base[level] at call time would then resolve to the wrapper itself
+  // and recurse until the stack blew — which crash-looped the service.
+  const original = Object.fromEntries(
+    ["info", "warn", "error", "debug"].map((level) => [level, (base[level] ?? base.log).bind(base)])
+  );
+  const wrap = (level) => (...args) => original[level](...args.map((arg) => (typeof arg === "string" ? redact(arg) : arg)));
   return { info: wrap("info"), warn: wrap("warn"), error: wrap("error"), debug: wrap("debug") };
 }

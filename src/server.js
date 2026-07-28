@@ -19,12 +19,20 @@ import { GORK_NO_DATA_PROMPT, GORK_POST_SEEDS, GORK_SYSTEM_PROMPT } from "./pers
 import { Shitposter } from "./shitposter.js";
 import { StyleCorpus } from "./style-corpus.js";
 import { MarketData } from "./market-data.js";
+import { redactingLogger, securityHeaders } from "./http-guard.js";
 import { WalletVault } from "./wallet-vault.js";
 import { ChainClient } from "./chain.js";
 import { Dex } from "./dex.js";
 import { AssetResolver } from "./asset-resolver.js";
 import { OnchainBroker } from "./onchain-broker.js";
 import { OnchainApi } from "./onchain-api.js";
+
+// Key material must never reach a log line, so the process logger redacts
+// anything shaped like a private key or bearer token before it is written.
+const safeLogger = redactingLogger(console);
+console.info = safeLogger.info;
+console.warn = safeLogger.warn;
+console.error = safeLogger.error;
 
 const config = loadConfig();
 const store = config.databaseUrl ? new PostgresStore(config.databaseUrl) : new Store(config.dataFile);
@@ -107,14 +115,22 @@ const workers = config.bots.map((bot) => new MentionWorker({
   onchain
 }));
 
+const RESPONSE_HEADERS = securityHeaders({ https: config.publicBaseUrl.startsWith("https:") || config.onchain.siteBaseUrl.startsWith("https:") });
+
 const server = createServer(async (request, response) => {
   try {
     await route(request, response);
   } catch (error) {
     console.error(error);
-    sendJson(response, error.statusCode ?? 500, { error: error.message ?? "Internal server error" });
+    // Only errors we raised ourselves carry a message worth showing; anything
+    // else could describe internals, so it becomes a flat 500.
+    const statusCode = error.statusCode ?? 500;
+    sendJson(response, statusCode, { error: statusCode === 500 ? "Internal server error" : error.message });
   }
 });
+// A slow-loris client must not hold a socket open forever.
+server.headersTimeout = 20_000;
+server.requestTimeout = 30_000;
 
 // Filtered stream: X pushes mentions in ~1s over an outbound connection, so it
 // needs no public URL. Polling stays on as a backstop; claimMention dedupes.
@@ -311,12 +327,12 @@ function httpError(statusCode, message) {
 }
 
 function sendJson(response, statusCode, body) {
-  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+  response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...RESPONSE_HEADERS });
   response.end(JSON.stringify(body));
 }
 
 function sendHtml(response, statusCode, body) {
-  response.writeHead(statusCode, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'" });
+  response.writeHead(statusCode, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'", ...RESPONSE_HEADERS });
   response.end(body);
 }
 

@@ -1,6 +1,13 @@
 import { createHmac, randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { formatEther, parseUnits } from "ethers";
 import { NATIVE } from "./dex.js";
+import { RateLimiter, clientIp, originAllowed } from "./http-guard.js";
+
+// A stolen session cookie is the realistic threat here, so the endpoints that
+// move money are each rate limited, and the one that hands over the private
+// key additionally demands a login fresh enough that the attacker would have
+// had to steal the X account itself.
+const EXPORT_MAX_SESSION_AGE_MS = 30 * 60 * 1000;
 
 // HTTP surface for the portfolio site. The site never holds keys or sessions
 // itself — it proxies /api/onchain and /auth here, so the browser's cookies
@@ -29,6 +36,31 @@ export class OnchainApi {
     // browsers require Secure. Derived from the site URL so local http dev
     // still works.
     this.secureCookies = config.onchain.siteBaseUrl.startsWith("https:");
+    // Requests may legitimately arrive at the site origin or, in local
+    // development, directly at this server.
+    this.allowedOrigins = [config.onchain.siteBaseUrl, config.publicBaseUrl].filter(Boolean);
+    this.limits = {
+      login: new RateLimiter({ windowMs: 10 * 60_000, max: 20 }),
+      portfolio: new RateLimiter({ windowMs: 60_000, max: 60 }),
+      move: new RateLimiter({ windowMs: 10 * 60_000, max: 10 }),
+      export: new RateLimiter({ windowMs: 60 * 60_000, max: 3 })
+    };
+  }
+
+  // Every state-changing route runs through this: same-origin only, then a
+  // per-session (or per-IP, pre-login) budget.
+  guard(request, response, { limiter, key }) {
+    if (!originAllowed(request, this.allowedOrigins)) {
+      sendJson(response, 403, { error: "Cross-origin requests are not allowed" });
+      return false;
+    }
+    const retryAfter = limiter.check(key);
+    if (retryAfter !== null) {
+      response.setHeader("retry-after", String(retryAfter));
+      sendJson(response, 429, { error: `Too many attempts. Try again in ${retryAfter}s.` });
+      return false;
+    }
+    return true;
   }
 
   oauthReady() {
@@ -39,11 +71,20 @@ export class OnchainApi {
   async route(request, response, url) {
     const { pathname } = url;
     if (request.method === "GET" && pathname.startsWith("/api/onchain/portfolio/")) {
+      if (this.limits.portfolio.check(clientIp(request)) !== null) {
+        return sendJson(response, 429, { error: "Slow down." }), true;
+      }
       await this.portfolio(response, decodeURIComponent(pathname.split("/").filter(Boolean)[3] ?? ""));
       return true;
     }
     if (request.method === "GET" && pathname === "/api/onchain/me") { await this.me(request, response); return true; }
-    if (request.method === "GET" && pathname === "/auth/x/login") { await this.login(response, url); return true; }
+    if (request.method === "GET" && pathname === "/auth/x/login") {
+      if (this.limits.login.check(clientIp(request)) !== null) {
+        return sendJson(response, 429, { error: "Too many sign-in attempts. Try again shortly." }), true;
+      }
+      await this.login(response, url);
+      return true;
+    }
     if (request.method === "GET" && pathname === "/auth/x/callback") { await this.callback(request, response, url); return true; }
     if (request.method === "POST" && pathname === "/auth/logout") {
       setCookie(response, "xbot_session", "", 0, this.secureCookies);
@@ -140,7 +181,7 @@ export class OnchainApi {
     if (!meResponse.ok) return sendJson(response, 502, { error: "Could not read X profile" });
     const me = (await meResponse.json()).data;
 
-    const session = { authorId: String(me.id), username: me.username.toLowerCase(), exp: Date.now() + 7 * 86_400_000 };
+    const session = { authorId: String(me.id), username: me.username.toLowerCase(), iat: Date.now(), exp: Date.now() + 7 * 86_400_000 };
     setCookie(response, "xbot_oauth", "", 0, this.secureCookies);
     setCookie(response, "xbot_session", this.signValue(Buffer.from(JSON.stringify(session)).toString("base64url")), 7 * 86_400, this.secureCookies);
     response.writeHead(302, { location: `${this.config.onchain.siteBaseUrl}${returnTo || `/u/${session.username}`}` });
@@ -152,6 +193,7 @@ export class OnchainApi {
   async withdraw(request, response) {
     const session = this.session(request);
     if (!session) return sendJson(response, 401, { error: "Sign in with X first" });
+    if (!this.guard(request, response, { limiter: this.limits.move, key: `w:${session.authorId}` })) return;
     const wallet = await this.store.getWalletByAuthor(this.defaultBot, session.authorId);
     if (!wallet) return sendJson(response, 404, { error: "No wallet for this account" });
     const body = await readJson(request);
@@ -177,6 +219,7 @@ export class OnchainApi {
   async sell(request, response) {
     const session = this.session(request);
     if (!session) return sendJson(response, 401, { error: "Sign in with X first" });
+    if (!this.guard(request, response, { limiter: this.limits.move, key: `s:${session.authorId}` })) return;
     const wallet = await this.store.getWalletByAuthor(this.defaultBot, session.authorId);
     if (!wallet) return sendJson(response, 404, { error: "No wallet for this account" });
     const body = await readJson(request);
@@ -202,6 +245,13 @@ export class OnchainApi {
   async exportKey(request, response) {
     const session = this.session(request);
     if (!session) return sendJson(response, 401, { error: "Sign in with X first" });
+    if (!this.guard(request, response, { limiter: this.limits.export, key: `k:${session.authorId}` })) return;
+    // Handing over the key is irreversible, so a merely-valid session is not
+    // enough: it has to be a session that was created minutes ago, which a
+    // cookie thief cannot produce without the X account itself.
+    if (!session.iat || Date.now() - session.iat > EXPORT_MAX_SESSION_AGE_MS) {
+      return sendJson(response, 401, { error: "For key export, sign in with X again first.", reauth: true });
+    }
     const wallet = await this.store.getWalletByAuthor(this.defaultBot, session.authorId);
     if (!wallet) return sendJson(response, 404, { error: "No wallet for this account" });
     this.logger.info(`Private key exported by @${session.username} (${session.authorId})`);

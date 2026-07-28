@@ -133,6 +133,7 @@ export default function Home() {
         terms. Wallets are custodial until you export your key — which you can
         do whenever you want.
       </p>
+      <p className="fineprint"><a href="/terms">Terms of Service</a> · <a href="/privacy">Privacy Policy</a></p>
     </main>
   );
 }

@@ -235,9 +235,10 @@ export class OnchainApi {
       username: me.username.toLowerCase(),
       epoch: wallet?.sessionEpoch ?? 0,
       iat: Date.now(),
-      // Short by design: this cookie can move money, and re-auth with X is
-      // one click for someone already logged in there.
-      exp: Date.now() + 24 * 3_600_000
+      // Staying signed in for a month is fine because the cookie alone cannot
+      // move money: withdrawals and key export each demand a recent sign-in,
+      // and logout revokes every cookie ever issued to the account.
+      exp: Date.now() + 30 * 86_400_000
     };
     setCookie(response, "xbot_oauth", "", 0, this.secureCookies);
     setCookie(response, "xbot_session", this.signValue(Buffer.from(JSON.stringify(session)).toString("base64url")), 7 * 86_400, this.secureCookies);

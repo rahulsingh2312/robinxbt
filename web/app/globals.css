@@ -395,6 +395,14 @@ a.btn-glass .short { display: none; }
   box-shadow: var(--shadow);
 }
 
+/* Reads as part of the sentence it sits in, not as a control. */
+.link-button {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0;
+  box-shadow: none; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 3px;
+}
+.link-button:hover { color: var(--ink); opacity: 1; transform: none; }
+
 .warn-text { color: var(--warn); font-size: 0.83rem; }
 .error-text { color: var(--danger); font-size: 0.9rem; }
 .fineprint { color: var(--muted); font-size: 0.75rem; line-height: 1.75; text-align: center; }

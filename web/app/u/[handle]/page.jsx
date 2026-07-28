@@ -33,6 +33,16 @@ export default function PortfolioPage({ params }) {
     }).catch(() => {});
   }, [handle]);
 
+  // Deposits land in seconds on this chain, so the page keeps checking while
+  // it is open. It backs off when the tab is hidden rather than polling a
+  // rate-limited API in the background forever.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") refresh();
+    }, 10_000);
+    return () => clearInterval(timer);
+  }, [handle]);
+
   return (
     <main>
       <nav className="bar">
@@ -54,6 +64,7 @@ export default function PortfolioPage({ params }) {
           portfolio={portfolio}
           me={me}
           onChange={refresh}
+          onRefresh={refresh}
           onSignOut={async () => {
             await fetch("/auth/logout", { method: "POST" }).catch(() => {});
             setMe(null);
@@ -105,7 +116,7 @@ function LoadingStatement({ handle }) {
   );
 }
 
-function Statement({ portfolio, me, onChange, onSignOut }) {
+function Statement({ portfolio, me, onChange, onSignOut, onRefresh }) {
   // Compared by numeric X id: handles change hands, ids do not.
   const owns = portfolio.authorId
     ? me?.authorId === portfolio.authorId
@@ -137,7 +148,11 @@ function Statement({ portfolio, me, onChange, onSignOut }) {
         <p className="eyebrow" style={{ margin: "0 0 10px" }}>Total value</p>
         <div className="total-figure">{usd(portfolio.totalUsd)}</div>
         <p className="muted num under" style={{ fontSize: "0.82rem" }}>
-          {qty(portfolio.eth.amount)} ETH · {portfolio.tokens.length} token{portfolio.tokens.length === 1 ? "" : "s"} · live from chain
+          {qty(portfolio.eth.amount)} ETH · {portfolio.tokens.length} token{portfolio.tokens.length === 1 ? "" : "s"}
+          {" · "}
+          <button className="link-button" type="button" onClick={onRefresh} title="Check for new deposits">
+            refresh
+          </button>
         </p>
       </section>
 

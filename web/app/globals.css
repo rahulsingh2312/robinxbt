@@ -313,3 +313,35 @@ a.btn-quiet {
 }
 @keyframes pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+
+/* ---------- mobile ----------
+   Same philosophy, phone-tuned: tighter vertical rhythm, everything on the
+   page's own grid (no stray indents), controls that stack full-width instead
+   of wrapping into ragged half-rows, and the QR centered like a plaque. */
+@media (max-width: 560px) {
+  main { padding: 26px 18px 80px; }
+  nav.bar { margin-bottom: 44px; }
+
+  /* Let the balanced wrap decide the headline's lines; the desktop break
+     orphans a word at this width. */
+  h1 br { display: none; }
+  .hero p.sub { font-size: 0.95rem; }
+
+  .divider { margin: 52px 0 26px; }
+
+  .card { padding: 20px 18px; border-radius: 16px; }
+
+  /* Steps sit on the page grid, flush with the divider labels. */
+  .steps-row > div { padding: 22px 0; }
+
+  /* Deposit: the QR is the object of the card. Center it. */
+  .qr-box { margin: 0 auto; }
+
+  /* Manage and search controls: one clean column, no ragged wraps. */
+  .card form.row select,
+  .card form.row input,
+  .card form.row button { flex: 1 1 100%; width: 100%; }
+
+  .owner img { width: 40px; height: 40px; }
+  .owner .handle { font-size: 1.15rem; }
+}

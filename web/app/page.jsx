@@ -37,7 +37,7 @@ export default function Home() {
 
       <header className="hero">
         <p className="eyebrow">The bot that buys when you tell it to</p>
-        <h1>Talk trash. Get talked back.<br /><em>Own the bag anyway.</em></h1>
+        <h1>Talk trash. Get talked back.<br />{" "}<em>Own the bag anyway.</em></h1>
         <p className="sub">
           Mention the bot on X and it opens a wallet in your name on Robinhood
           Chain. Fund it with ETH or USDG, say “buy”, and tokenized stocks or

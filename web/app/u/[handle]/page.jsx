@@ -168,7 +168,17 @@ function Statement({ portfolio, me, onChange, onSignOut, onRefresh }) {
             <thead><tr><th>Asset</th><th>Amount</th><th>Value</th></tr></thead>
             <tbody>
               <tr>
-                <td><div className="asset"><span className="tick">ETH</span></div></td>
+                <td>
+                  <div className="asset">
+                    <span className="coin" aria-hidden="true">
+                      <svg viewBox="0 0 30 30"><circle cx="15" cy="15" r="15" fill="#232323" /><path d="M15 5.5l5.4 9-5.4 3.3-5.4-3.3 5.4-9zm0 13.6l5.4-3.3-5.4 8.7-5.4-8.7 5.4 3.3z" fill="#e8e8e4" /></svg>
+                    </span>
+                    <span>
+                      <span className="tick">ETH</span>
+                      <small>Ether · gas</small>
+                    </span>
+                  </div>
+                </td>
                 <td className="num">{qty(portfolio.eth.amount)}</td>
                 <td className="num">{usd(portfolio.eth.valueUsd)}</td>
               </tr>
@@ -308,7 +318,6 @@ function ManagePanel({ portfolio, onChange }) {
             placeholder="amount"
             value={sell.amount}
             onChange={(event) => setSell({ ...sell, amount: event.target.value })}
-            style={{ width: 130 }}
             aria-label="Sell amount"
           />
           <button
@@ -322,7 +331,7 @@ function ManagePanel({ portfolio, onChange }) {
           >
             Max
           </button>
-          <button className="wide" disabled={busy} type="submit">Sell for ETH</button>
+          <button disabled={busy} type="submit">Sell for ETH</button>
         </form>
       )}
 
@@ -349,7 +358,6 @@ function ManagePanel({ portfolio, onChange }) {
           placeholder="0x destination"
           value={withdrawForm.to}
           onChange={(event) => setWithdrawForm({ ...withdrawForm, to: event.target.value })}
-          style={{ flex: 1, minWidth: 240 }}
           aria-label="Destination address"
         />
         <input
@@ -357,10 +365,9 @@ function ManagePanel({ portfolio, onChange }) {
           placeholder="amount"
           value={withdrawForm.amount}
           onChange={(event) => setWithdrawForm({ ...withdrawForm, amount: event.target.value })}
-          style={{ width: 130 }}
           aria-label="Withdraw amount"
         />
-        <button className="wide" disabled={busy} type="submit">Withdraw</button>
+        <button disabled={busy} type="submit">Withdraw</button>
       </form>
 
       <div className="stack manage-section" style={{ gap: 10 }}>

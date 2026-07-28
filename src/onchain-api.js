@@ -7,8 +7,10 @@ import { RateLimiter, clientIp, originAllowed, proxyAuthenticated } from "./http
 // move money are each rate limited, and the one that hands over the private
 // key additionally demands a login fresh enough that the attacker would have
 // had to steal the X account itself.
-const EXPORT_MAX_SESSION_AGE_MS = 30 * 60 * 1000;
-const MOVE_MAX_SESSION_AGE_MS = 12 * 60 * 60 * 1000;
+// Both irreversible actions require a sign-in from the last five minutes, so
+// a stolen cookie is useless without the X account itself.
+const EXPORT_MAX_SESSION_AGE_MS = 5 * 60 * 1000;
+const MOVE_MAX_SESSION_AGE_MS = 5 * 60 * 1000;
 
 // HTTP surface for the portfolio site. The site never holds keys or sessions
 // itself — it proxies /api/onchain and /auth here, so the browser's cookies

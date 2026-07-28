@@ -235,11 +235,12 @@ th {
 td { padding: 14px 0; border-top: 1px solid var(--line); text-align: right; font-size: 0.95rem; }
 th:first-child, td:first-child { text-align: left; }
 td .asset { display: flex; align-items: center; gap: 12px; text-align: left; }
-td .asset img {
+td .asset img, td .asset .coin svg {
   width: 30px; height: 30px; border-radius: 999px;
   background: var(--surface-2);
   border: 1px solid var(--edge);
 }
+td .asset .coin { display: inline-flex; }
 td .asset .tick { font-weight: 600; }
 td .asset small { display: block; color: var(--muted); font-size: 0.75rem; }
 
@@ -365,8 +366,19 @@ a.btn-glass .short { display: none; }
 }
 .asset-cluster > * + * { margin-left: -9px; }
 
-/* Manage card: sections divided by hairlines, every block on the same grid. */
+/* Manage card: sections divided by hairlines, every block on the same grid.
+   Each row is one grid so the controls line up column-for-column between
+   the sell and withdraw forms instead of drifting with their content. */
 .manage-section { border-top: 1px solid var(--line); padding-top: 18px; }
+.card form.manage-section {
+  display: grid;
+  grid-template-columns: 150px 1fr 96px 132px;
+  gap: 10px;
+  align-items: center;
+}
+.card form.manage-section > * { width: 100%; min-width: 0; }
+/* Both forms use the same four columns, so Sell and Withdraw sit directly
+   under one another: asset, value, helper, action. */
 .manage-section .section-label { font-weight: 600; font-size: 0.9rem; }
 .manage-section .section-sub { color: var(--muted); font-size: 0.8rem; margin: 2px 0 0; }
 /* Label left, action right, on ONE line at every width: the text column
@@ -439,7 +451,9 @@ a.btn-glass .short { display: none; }
 
   /* Manage controls on a two-column grid: full-width rows for the select,
      destination, and submit; amount and Max share the last row. */
-  .card form.row { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+  .card form.row, .card form.manage-section { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+  .card form.manage-section .grow { grid-column: auto; }
+  .card form.manage-section > button[type="submit"] { grid-column: 1 / -1; }
   .card form.row > * { width: 100%; }
   .card form.row > .wide { grid-column: 1 / -1; }
   .card form.row > button.quiet { width: auto; padding-left: 18px; padding-right: 18px; }

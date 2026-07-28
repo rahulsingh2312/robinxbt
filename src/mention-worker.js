@@ -239,18 +239,20 @@ export class MentionWorker {
     if (post.id && !(await this.store.claimOrder(this.bot.botUsername, post.id))) return null;
     try {
       const parent = await this.parentContext(post);
-      // Only our own advice may name the asset. Otherwise anyone could post
-      // bait naming their token, tell readers to reply "buy $20", and have
-      // the bot spend their money into an attacker-owned pool.
-      const trustedContext = parent.text && parent.authorId && String(parent.authorId) === String(this.bot.botUserId)
-        ? parent.text
-        : null;
+      // Buying straight off any tweet is the product: someone shills a token,
+      // you reply "buy $20", done. That means a stranger's text can name the
+      // asset, so the safety lives downstream instead — issuer-verified
+      // ticker resolution, a honeypot round-trip probe, and a price-impact
+      // ceiling, all applied before a single wei moves.
+      const fromBot = Boolean(parent.text && parent.authorId && String(parent.authorId) === String(this.bot.botUserId));
+      const trustedContext = parent.text ?? null;
       const result = await this.onchain.handleBuy({
         botUsername: this.bot.botUsername,
         authorId: post.author_id,
         username,
         intent,
         parentText: trustedContext,
+        contextFromBot: fromBot,
         pendingBuy,
         dryRun: this.bot.dryRun
       });

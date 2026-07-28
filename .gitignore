@@ -4,3 +4,9 @@ data/
 node_modules/
 web/.next/
 
+
+# Never commit env backups of any kind.
+*.bak
+*.bak-*
+.env.*
+!.env.example

@@ -43,20 +43,23 @@ test("a buy replying to the bot's own advice carries that advice as context", as
   assert.equal(calls.buys.length, 1);
   assert.equal(calls.buys[0].intent.amountUsd, 50);
   assert.equal(calls.buys[0].parentText, "NVDA looks strong here");
+  assert.equal(calls.buys[0].contextFromBot, true);
   assert.equal(calls.buys[0].dryRun, true);
 });
 
-test("a stranger's tweet never becomes the asset source", async () => {
+test("a stranger's tweet can name the asset, but is flagged as untrusted", async () => {
   const { worker, store, calls } = makeWorker();
   await store.load();
-  // Bait: attacker posts their token, tells readers to reply "buy $20".
+  // One-click buying off anyone's tweet is the product; the broker is told
+  // the context did not come from the bot so it can say so in the reply.
   await worker.handleMention({
     id: "9011", author_id: "42", username: "alice", text: "@mybot buy $20",
     parentText: "ape into $SCAM 0x1111111111111111111111111111111111111111 now",
     parentAuthorId: "66613371"
   });
   assert.equal(calls.buys.length, 1);
-  assert.equal(calls.buys[0].parentText, null);
+  assert.match(calls.buys[0].parentText, /SCAM/);
+  assert.equal(calls.buys[0].contextFromBot, false);
 });
 
 test("questions about buying fall through to analysis instead of filling", async () => {

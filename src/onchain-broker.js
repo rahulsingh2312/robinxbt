@@ -93,10 +93,15 @@ export class OnchainBroker {
   // `parentText` is the post the user replied to (usually the bot's own
   // advice) — that is where "buy" without a ticker gets its asset from,
   // exactly as the advice flow promises.
-  async executeBuy({ botUsername, authorId, username, intent, parentText, pendingBuy, dryRun }) {
+  async executeBuy({ botUsername, authorId, username, intent, parentText, contextFromBot = false, pendingBuy, dryRun }) {
     const wallet = await this.ensureWallet(botUsername, authorId, username);
 
-    const term = intent.term ?? pendingBuy?.term ?? extractAssetTerms(parentText ?? "")[0] ?? null;
+    const ownTerm = intent.term ?? pendingBuy?.term ?? null;
+    const contextTerm = ownTerm ? null : extractAssetTerms(parentText ?? "")[0] ?? null;
+    const term = ownTerm ?? contextTerm;
+    // An asset lifted from someone else's tweet is named in the reply, so the
+    // buyer can see exactly what their money went into.
+    const borrowed = Boolean(contextTerm && !contextFromBot);
     if (!term) {
       return { reply: `Tell me what to buy: a ticker like $NVDA or a contract address, plus a dollar amount.` };
     }
@@ -229,8 +234,9 @@ export class OnchainBroker {
     const result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn, { route });
     const filled = Number(result.quotedOut) / 10 ** meta.decimals;
     this.logger.info(`Onchain buy: $${amountUsd} of ${asset.symbol} for author ${authorId}, tx ${result.hash}`);
+    const provenance = borrowed && !asset.official ? ` (${asset.symbol} came from that tweet, not from me)` : "";
     return {
-      reply: `Bought ~${formatQty(filled)} ${asset.symbol} for $${amountUsd}. It’s in your wallet. Check the portfolio link in bio to see and manage your assets.`,
+      reply: `Bought ~${formatQty(filled)} ${asset.symbol} for $${amountUsd}${provenance}. It’s in your wallet. Check the portfolio link in bio to see and manage your assets.`,
       txHash: result.hash
     };
   }

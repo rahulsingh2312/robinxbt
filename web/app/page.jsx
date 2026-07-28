@@ -32,7 +32,7 @@ export default function Home() {
     <main>
       <nav className="bar">
         <a className="wordmark" href="/"><img src="/pfp-peterpan.jpg" alt="" />peterpan.</a>
-        <span className="pill"><span className="dot" />ROBINHOOD CHAIN · LIVE</span>
+        <span className="pill"><span className="dot" />LIVE ON ROBINHOOD CHAIN</span>
       </nav>
 
       <header className="hero">
@@ -128,7 +128,7 @@ export default function Home() {
       <div className="divider" aria-hidden="true"><span>· · ·</span></div>
 
       <p className="fineprint">
-        Not investment advice; tokens can go to zero. Robinhood Stock Tokens are
+        Not investment advice. Robinhood Stock Tokens are
         not offered to U.S., Canadian, UK, or Swiss persons under the issuer’s
         terms. Wallets are custodial until you export your key, which you can
         do whenever you want.

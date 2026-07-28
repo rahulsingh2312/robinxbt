@@ -65,7 +65,7 @@ export default function PortfolioPage({ params }) {
 
       <p className="fineprint">
         Balances read live from Robinhood Chain. Buys happen only by talking to
-        the bot on X. Not investment advice; tokens can go to zero. Robinhood
+        the bot on X. Not investment advice. Robinhood
         Stock Tokens are not offered to U.S., Canadian, UK, or Swiss persons.
       </p>
     </main>

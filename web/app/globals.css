@@ -112,7 +112,9 @@ nav.bar { display: flex; justify-content: space-between; align-items: center; ma
   border: 1px solid var(--line); border-radius: 999px; padding: 6px 13px;
   background: transparent; white-space: nowrap;
 }
-.pill .dot { width: 5px; height: 5px; border-radius: 999px; background: var(--ink); }
+.pill .dot { width: 5px; height: 5px; border-radius: 999px; background: var(--ink); animation: breathe 2.4s ease-in-out infinite; }
+@keyframes breathe { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .pill .dot { animation: none; } }
 
 /* ---------- layout primitives ---------- */
 

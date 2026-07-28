@@ -66,7 +66,7 @@ const llm = config.llm.enabled
       ...config.llm,
       broker: quoteSource,
       ...(gork
-        ? { systemPrompt: GORK_SYSTEM_PROMPT, noDataPrompt: GORK_NO_DATA_PROMPT, styleProvider: corpus ? () => corpus.block() : null }
+        ? { systemPrompt: GORK_SYSTEM_PROMPT, noDataPrompt: GORK_NO_DATA_PROMPT, styleProvider: corpus ? () => corpus.block() : null, retryNonEnglish: true }
         : {})
     })
   : null;

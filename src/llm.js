@@ -28,8 +28,12 @@ You currently have NO live market data connection.
 // watchlists, search) is fair game for grounding a reply.
 const WRITE_TOOL = /order|buy|sell|trade|transfer|deposit|withdraw|cancel|replace|modify|update|delete|remove|add|create|set_/i;
 
+// CJK, Hangul, Cyrillic, Arabic, Hebrew, Devanagari, Thai. Latin accents and
+// punctuation are fine — this is about a reply switching writing systems.
+const NON_LATIN = /[Ѐ-ӿ֐-׿؀-ۿऀ-ॿ฀-๿぀-ヿ㐀-䶿一-鿿가-힯]/;
+
 export class LlmClient {
-  constructor({ baseUrl, apiKey, model, reasoningEffort = "low", broker = null, maxToolRounds = 4, timeoutMs = 60_000, logger = console, systemPrompt = SYSTEM_PROMPT, noDataPrompt = NO_DATA_PROMPT, styleProvider = null }) {
+  constructor({ baseUrl, apiKey, model, reasoningEffort = "low", broker = null, maxToolRounds = 4, timeoutMs = 60_000, logger = console, systemPrompt = SYSTEM_PROMPT, noDataPrompt = NO_DATA_PROMPT, styleProvider = null, retryNonEnglish = false }) {
     this.baseUrl = (baseUrl ?? "https://api.deepseek.com").replace(/\/$/, "");
     this.apiKey = apiKey;
     this.model = model ?? "deepseek-v4-pro";
@@ -43,6 +47,10 @@ export class LlmClient {
     this.logger = logger;
     this.systemPrompt = systemPrompt;
     this.noDataPrompt = noDataPrompt;
+    // A prompt rule alone did not hold: replies came back with Chinese
+    // characters spliced mid-sentence. Detecting the script and asking again
+    // is deterministic where an instruction was not.
+    this.retryNonEnglish = retryNonEnglish;
     // Async () => string of extra system-prompt material (e.g. style examples
     // scraped from a real account). Fetched per turn so it can stay fresh.
     this.styleProvider = styleProvider;
@@ -73,6 +81,15 @@ export class LlmClient {
   }
 
   async ask(question) {
+    const answer = await this.answer(question);
+    if (!this.retryNonEnglish || !NON_LATIN.test(answer.text)) return answer;
+    this.logger.warn("Reply contained non-Latin script; asking again in English");
+    const retry = await this.answer(`${question}\n\nWrite the reply in English only. No other scripts or languages.`);
+    // A second failure still beats posting half a sentence of another script.
+    return NON_LATIN.test(retry.text) ? { ...retry, text: "" } : retry;
+  }
+
+  async answer(question) {
     const tools = await this.tools();
     // A style-corpus failure must never take the reply down with it: the
     // persona prompt alone is a complete instruction set.

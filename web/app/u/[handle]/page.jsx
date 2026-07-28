@@ -15,8 +15,13 @@ export default function PortfolioPage({ params }) {
   const refresh = () => {
     fetch(`/api/onchain/portfolio/${encodeURIComponent(handle)}`)
       .then(async (response) => {
-        if (!response.ok) throw new Error((await response.json()).error ?? "Failed to load");
-        setPortfolio(await response.json());
+        // A non-JSON body means the proxy target is down or missing, not a
+        // user-level error — say that instead of leaking a parse error.
+        const body = await response.json().catch(() => {
+          throw new Error("The portfolio API is unreachable right now. Try again in a minute.");
+        });
+        if (!response.ok) throw new Error(body.error ?? "Failed to load");
+        setPortfolio(body);
       })
       .catch((cause) => setError(cause.message));
   };

@@ -18,7 +18,7 @@ export default function Home() {
 
       <header className="stack" style={{ gap: 12 }}>
         <p className="eyebrow">The bot that buys when you tell it to</p>
-        <h1>Talk trash. Get talked back. Own the bag anyway.</h1>
+        <h1>Talk trash. Get talked back. <em>Own the bag anyway.</em></h1>
         <p className="muted" style={{ maxWidth: "56ch", margin: 0 }}>
           Mention the bot on X and it opens a wallet in your name on Robinhood
           Chain. Fund it with ETH or USDG, say “buy”, and tokenized stocks or
@@ -29,34 +29,46 @@ export default function Home() {
 
       <section className="thread" aria-label="Example conversation">
         <div className="tweet you">
-          <div className="who">rahul. <small>@rahu1o1</small></div>
+          <div className="who-row">
+            <img src="/pfp-drofagents.jpg" alt="" />
+            <div className="who">Dr Of Agents <small>@DrOfAgents</small></div>
+          </div>
           <p>@TryPeterpan whats up with todays market, got 10 bucks to invest</p>
         </div>
         <div className="tweet">
-          <div className="who">Peterpan <small>@TryPeterpan</small></div>
+          <div className="who-row">
+            <img src="/pfp-peterpan.jpg" alt="" />
+            <div className="who">Peterpan <small>@TryPeterpan</small></div>
+          </div>
           <p>that’s a sandwich, not an investment. put it in something stupid enough to match the energy. $CASHCAT maybe.</p>
         </div>
         <div className="tweet you">
-          <div className="who">rahul. <small>@rahu1o1</small></div>
+          <div className="who-row">
+            <img src="/pfp-drofagents.jpg" alt="" />
+            <div className="who">Dr Of Agents <small>@DrOfAgents</small></div>
+          </div>
           <p>buy it for me</p>
         </div>
         <div className="tweet fill">
-          <div className="who">Peterpan <small>@TryPeterpan</small></div>
+          <div className="who-row">
+            <img src="/pfp-peterpan.jpg" alt="" />
+            <div className="who">Peterpan <small>@TryPeterpan</small></div>
+          </div>
           <p><strong>Bought ~273 CASHCAT for $10.</strong> It’s in your wallet — check the portfolio link in bio to see and manage your assets.</p>
         </div>
       </section>
 
       <section className="steps">
         <div className="card">
-          <h2>1 · Talk</h2>
+          <h2><span className="n">01</span>Talk</h2>
           <p>Mention @TryPeterpan. Ask for a read, get roasted, hear a ticker.</p>
         </div>
         <div className="card">
-          <h2>2 · Fund</h2>
+          <h2><span className="n">02</span>Fund</h2>
           <p>Your wallet exists the moment you tweet. Top it up with ETH or USDG on Robinhood Chain.</p>
         </div>
         <div className="card">
-          <h2>3 · Own</h2>
+          <h2><span className="n">03</span>Own</h2>
           <p>Say “buy”. The fill lands on-chain in your wallet — not ours. Manage everything here.</p>
         </div>
       </section>

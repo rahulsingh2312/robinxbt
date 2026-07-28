@@ -386,6 +386,11 @@ a.btn-quiet {
   .manage-section .spread { gap: 14px; }
   .manage-section .section-sub { font-size: 0.74rem; }
 
+  /* Deposit card on phones: buttons side by side, network note and the
+     bot prompt centered under them. */
+  .deposit-actions { justify-content: center; }
+  .deposit-actions .warn-text { flex-basis: 100%; text-align: center; }
+
   .owner img { width: 40px; height: 40px; }
   .owner .handle { font-size: 1.15rem; }
 }

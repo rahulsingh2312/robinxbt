@@ -201,7 +201,7 @@ function DepositCard({ address, explorer }) {
         <div className="qr-box"><canvas ref={canvasRef} /></div>
         <div className="stack" style={{ gap: 10, flex: 1, minWidth: 220 }}>
           <div className="address">{address}</div>
-          <div className="row">
+          <div className="row deposit-actions">
             <button
               className="quiet"
               type="button"
@@ -214,11 +214,11 @@ function DepositCard({ address, explorer }) {
               {copied ? "Copied ✓" : "Copy address"}
             </button>
             <a href={explorer} target="_blank" rel="noreferrer">Explorer ↗</a>
-            <span className="warn-text" style={{ fontSize: "0.7rem", lineHeight: 1.45, flex: 1, minWidth: 170 }}>
-              Robinhood Chain (4663) only. Other networks lose funds.
+            <span className="warn-text" style={{ fontSize: "0.72rem", whiteSpace: "nowrap" }}>
+              Robinhood Chain (4663) only
             </span>
           </div>
-          <p style={{ margin: 0, fontSize: "0.88rem" }}>
+          <p style={{ margin: 0, fontSize: "0.88rem", textAlign: "center" }}>
             Funded? <a href="https://x.com/intent/post?text=%40TryPeterpan%20just%20funded%20my%20wallet%2C%20what%20should%20I%20buy%3F" target="_blank" rel="noreferrer">Tell the bot to buy ↗</a>
           </p>
         </div>

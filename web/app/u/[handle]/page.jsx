@@ -50,7 +50,15 @@ export default function PortfolioPage({ params }) {
       ) : !portfolio ? (
         <LoadingStatement handle={handle} />
       ) : (
-        <Statement portfolio={portfolio} me={me} onChange={refresh} />
+        <Statement
+          portfolio={portfolio}
+          me={me}
+          onChange={refresh}
+          onSignOut={async () => {
+            await fetch("/auth/logout", { method: "POST" }).catch(() => {});
+            setMe(null);
+          }}
+        />
       )}
 
       <div className="divider" aria-hidden="true"><span>· · ·</span></div>
@@ -97,7 +105,7 @@ function LoadingStatement({ handle }) {
   );
 }
 
-function Statement({ portfolio, me, onChange }) {
+function Statement({ portfolio, me, onChange, onSignOut }) {
   const owns = me?.username === portfolio.username;
   return (
     <div className="stack" style={{ gap: 28 }}>
@@ -106,7 +114,14 @@ function Statement({ portfolio, me, onChange }) {
           <Avatar handle={portfolio.username} />
           <div className="handle">@{portfolio.username}<small>ON-CHAIN PORTFOLIO</small></div>
         </div>
-        {!owns && (
+        {owns ? (
+          <button className="quiet" type="button" onClick={onSignOut}>Sign out</button>
+        ) : me ? (
+          <div className="row" style={{ gap: 8 }}>
+            <a className="btn-quiet" href={`/u/${encodeURIComponent(me.username)}`}>My portfolio</a>
+            <button className="quiet" type="button" onClick={onSignOut}>Sign out</button>
+          </div>
+        ) : (
           <a className="btn-quiet" href={`/auth/x/login?return=/u/${encodeURIComponent(portfolio.username)}`}>
             Your wallet? Sign in with 𝕏
           </a>

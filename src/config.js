@@ -31,8 +31,19 @@ export function loadConfig() {
       model: process.env.LLM_MODEL_NAME ?? process.env.DEEPSEEK_MODEL ?? "deepseek-v4-pro",
       reasoningEffort: process.env.LLM_REASONING_EFFORT ?? "low"
     },
-    persona: loadPersona()
+    persona: loadPersona(),
+    replyCaps: loadReplyCaps()
   };
+}
+
+// Replies cost money on X and another bot answering ours would otherwise loop
+// without bound, so both a per-author and a per-day ceiling are always on.
+function loadReplyCaps() {
+  const perAuthorPerHour = Number(process.env.REPLY_MAX_PER_AUTHOR_PER_HOUR ?? 5);
+  const perDay = Number(process.env.REPLY_MAX_PER_DAY ?? 200);
+  if (!Number.isFinite(perAuthorPerHour) || perAuthorPerHour < 1) throw new Error("REPLY_MAX_PER_AUTHOR_PER_HOUR must be at least 1");
+  if (!Number.isFinite(perDay) || perDay < 1) throw new Error("REPLY_MAX_PER_DAY must be at least 1");
+  return { perAuthorPerHour, perDay };
 }
 
 function loadPersona() {

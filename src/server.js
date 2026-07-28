@@ -79,7 +79,8 @@ const workers = config.bots.map((bot) => new MentionWorker({
   broker,
   limits,
   insiders,
-  llm
+  llm,
+  replyCaps: config.replyCaps
 }));
 
 const server = createServer(async (request, response) => {

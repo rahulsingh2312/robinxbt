@@ -46,6 +46,42 @@ test("an empty generation is skipped, not posted", async () => {
   assert.equal(calls.posted.length, 0);
 });
 
+test("recent posts are fed back as an avoid-list", async () => {
+  const asked = [];
+  const { shitposter } = poster({ dryRun: false, text: "nvda down 5% again" });
+  shitposter.llm = { ask: async (prompt) => { asked.push(prompt); return { text: "nvda down 5% again" }; } };
+  await shitposter.fire();
+  await shitposter.fire();
+  assert.ok(!asked[0].includes("Do not reuse"), "first post has nothing to avoid");
+  assert.match(asked[1], /Do not reuse their subject/);
+  assert.match(asked[1], /- nvda down 5% again/);
+});
+
+test("the avoid-list is capped at the memory size", async () => {
+  const { shitposter } = poster({ dryRun: true, text: "x" });
+  shitposter.memory = 2;
+  shitposter.llm = { ask: async () => ({ text: `post ${shitposter.recent.length}` }) };
+  for (let i = 0; i < 5; i += 1) await shitposter.fire();
+  assert.equal(shitposter.recent.length, 2);
+});
+
+test("seed rotation avoids repeating a recent seed", async () => {
+  const asked = [];
+  const { shitposter } = poster({ dryRun: true, text: "x" });
+  shitposter.seeds = ["alpha", "beta"];
+  shitposter.llm = { ask: async (prompt) => { asked.push(prompt.split("\n")[0]); return { text: "x" }; } };
+  await shitposter.fire();
+  await shitposter.fire();
+  assert.notEqual(asked[0], asked[1]);
+});
+
+test("a single-seed rotation still fires", async () => {
+  const { shitposter, calls } = poster({ dryRun: false, text: "solo" });
+  await shitposter.fire();
+  await shitposter.fire();
+  assert.equal(calls.posted.length, 2);
+});
+
 test("a broker or LLM failure does not throw out of fire()", async () => {
   const { shitposter, calls } = poster({ dryRun: false, text: "x" });
   shitposter.llm = { ask: async () => { throw new Error("LLM down"); } };

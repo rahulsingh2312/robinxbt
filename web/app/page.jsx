@@ -3,6 +3,25 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+// X's verified seal, drawn with the platform's own badge path so it reads as
+// the real thing; gold, like an organization account.
+function GoldTick() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-label="Verified account" style={{ verticalAlign: "-3px", marginLeft: 2 }}>
+      <defs>
+        <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#f4c33f" />
+          <stop offset="1" stopColor="#cb8600" />
+        </linearGradient>
+      </defs>
+      <path
+        fill="url(#gold)"
+        d="M22.25 12c0-1.43-.88-2.67-2.19-3.34.46-1.39.2-2.9-.81-3.91s-2.52-1.27-3.91-.81c-.66-1.31-1.91-2.19-3.34-2.19s-2.67.88-3.33 2.19c-1.4-.46-2.91-.2-3.92.81s-1.26 2.52-.8 3.91c-1.31.67-2.2 1.91-2.2 3.34s.89 2.67 2.2 3.34c-.46 1.39-.21 2.9.8 3.91s2.52 1.26 3.91.81c.67 1.31 1.91 2.19 3.34 2.19s2.68-.88 3.34-2.19c1.39.45 2.9.2 3.91-.81s1.27-2.52.81-3.91c1.31-.67 2.19-1.91 2.19-3.34zm-11.71 4.2L6.8 12.46l1.41-1.42 2.26 2.26 4.8-5.23 1.47 1.36-6.2 6.77z"
+      />
+    </svg>
+  );
+}
+
 // The hero is the product: an actual conversation, because the entire app IS
 // a conversation. The page's one job is to make you go tweet at the bot.
 export default function Home() {
@@ -39,7 +58,7 @@ export default function Home() {
         <div className="tweet">
           <div className="who-row">
             <img src="/pfp-peterpan.jpg" alt="" />
-            <div className="who">Peterpan <small>@TryPeterpan</small></div>
+            <div className="who">Peterpan <GoldTick /> <small>@TryPeterpan</small></div>
           </div>
           <p>that’s a sandwich, not an investment. put it in something stupid enough to match the energy. $CASHCAT maybe.</p>
         </div>
@@ -53,7 +72,7 @@ export default function Home() {
         <div className="tweet fill">
           <div className="who-row">
             <img src="/pfp-peterpan.jpg" alt="" />
-            <div className="who">Peterpan <small>@TryPeterpan</small></div>
+            <div className="who">Peterpan <GoldTick /> <small>@TryPeterpan</small></div>
           </div>
           <p><strong>Bought ~273 CASHCAT for $10.</strong> It’s in your wallet — check the portfolio link in bio to see and manage your assets.</p>
         </div>

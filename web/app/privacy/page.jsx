@@ -1,4 +1,4 @@
-export const metadata = { title: "Privacy Policy — Peterpan" };
+export const metadata = { title: "Privacy Policy · Peterpan" };
 
 export default function Privacy() {
   return (
@@ -21,8 +21,8 @@ export default function Privacy() {
             Your X numeric user ID and handle (that pair is your wallet's
             identity), the public posts in which you mention the bot (read to
             answer and to execute your instructions), your wallet address and
-            its on-chain activity (public on the blockchain by nature), and —
-            when you sign in on this site — a session cookie tied to your X
+            its on-chain activity (public on the blockchain by nature), and,
+            when you sign in on this site, a session cookie tied to your X
             account.
           </p>
         </section>
@@ -40,7 +40,7 @@ export default function Privacy() {
           <p className="muted">
             No email, no phone number, no password, no government ID. X OAuth
             access tokens are used once to confirm who you are and are not
-            stored. No analytics trackers, no advertising cookies — the only
+            stored. No analytics trackers, no advertising cookies. The only
             cookies are the essential sign-in ones.
           </p>
         </section>

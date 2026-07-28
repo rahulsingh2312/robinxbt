@@ -69,7 +69,7 @@ export class OnchainBroker {
 
     const term = intent.term ?? pendingBuy?.term ?? extractAssetTerms(parentText ?? "")[0] ?? null;
     if (!term) {
-      return { reply: `Tell me what to buy — a ticker like $NVDA or a contract address, plus a dollar amount.` };
+      return { reply: `Tell me what to buy: a ticker like $NVDA or a contract address, plus a dollar amount.` };
     }
     const asset = await this.resolver.resolve(term);
     if (asset?.ambiguous) {
@@ -128,7 +128,7 @@ export class OnchainBroker {
     // beats the generic funding message.
     if (!spend && usdgBalance >= usdgUnits) {
       return {
-        reply: `You’ve got the $${amountUsd} in USDG, but no ETH for gas. Send a little ETH on Robinhood Chain (${formatEthAmount(Math.max(this.config.gasReserveEth * 2, 0.0005))} covers it) — address on your portfolio page, link in bio — then tell me to buy again.`
+        reply: `You’ve got the $${amountUsd} in USDG, but no ETH for gas. Send a little ETH on Robinhood Chain (${formatEthAmount(Math.max(this.config.gasReserveEth * 2, 0.0005))} covers it). Address on your portfolio page, link in bio. Then tell me to buy again.`
       };
     }
 
@@ -143,7 +143,7 @@ export class OnchainBroker {
         ? `Send to ${wallet.address} on Robinhood Chain`
         : `Your deposit address is on your portfolio page (link in bio, @${wallet.xUsername || username})`;
       return {
-        reply: `Your wallet’s short for that — send ${formatEthAmount(shortfall)} more ETH (or $${amountUsd} USDG plus gas dust). ${where}, then tell me to buy again.`
+        reply: `Your wallet’s short for that. Send ${formatEthAmount(shortfall)} more ETH (or $${amountUsd} USDG plus gas dust). ${where}, then tell me to buy again.`
       };
     }
 
@@ -157,7 +157,7 @@ export class OnchainBroker {
     const filled = Number(result.quotedOut) / 10 ** meta.decimals;
     this.logger.info(`Onchain buy: $${amountUsd} of ${asset.symbol} for author ${authorId}, tx ${result.hash}`);
     return {
-      reply: `Bought ~${formatQty(filled)} ${asset.symbol} for $${amountUsd}. It’s in your wallet — check the portfolio link in bio to see and manage your assets.`,
+      reply: `Bought ~${formatQty(filled)} ${asset.symbol} for $${amountUsd}. It’s in your wallet. Check the portfolio link in bio to see and manage your assets.`,
       txHash: result.hash
     };
   }

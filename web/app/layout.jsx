@@ -6,8 +6,8 @@ const body = Geist({ subsets: ["latin"], variable: "--font-body" });
 const mono = Geist_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono" });
 
 export const metadata = {
-  title: "Peterpan — talk to the bot, own the bag",
-  description: "Tweet at the bot, it opens you a wallet on Robinhood Chain. Stocks, memecoins, whatever — yours, on-chain, exportable."
+  title: "Peterpan",
+  description: "Tweet at the bot and it opens you a wallet on Robinhood Chain. Stocks, memecoins, whatever you ask for. Yours, on-chain, exportable."
 };
 
 export default function RootLayout({ children }) {

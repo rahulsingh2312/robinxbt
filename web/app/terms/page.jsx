@@ -1,4 +1,4 @@
-export const metadata = { title: "Terms of Service — Peterpan" };
+export const metadata = { title: "Terms of Service · Peterpan" };
 
 // Plain-language terms that describe what the service actually does. Legal
 // prose is kept honest: custodial wallets, real trades, real risk.
@@ -44,7 +44,7 @@ export default function Terms() {
           <p className="muted">
             The bot's replies are entertainment with a rude persona. They are
             not investment advice, a recommendation, or a fiduciary
-            relationship. Tokens — including tokenized-equity products — are
+            relationship. Tokens, including tokenized-equity products, are
             volatile and can go to zero.
           </p>
         </section>

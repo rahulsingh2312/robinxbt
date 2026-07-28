@@ -74,7 +74,7 @@ export default function Home() {
             <img src="/pfp-peterpan.jpg" alt="" />
             <div className="who">Peterpan <GoldTick /> <small>@TryPeterpan</small></div>
           </div>
-          <p><strong>Bought ~273 CASHCAT for $10.</strong> It’s in your wallet — check the portfolio link in bio to see and manage your assets.</p>
+          <p><strong>Bought ~273 CASHCAT for $10.</strong> It’s in your wallet. Check the portfolio link in bio to see and manage your assets.</p>
         </div>
       </section>
 
@@ -94,7 +94,7 @@ export default function Home() {
         <div>
           <span className="n">03</span>
           <h2>Own</h2>
-          <p>Say “buy”. The fill lands on-chain in your wallet — not ours.</p>
+          <p>Say “buy”. The fill lands on-chain in your wallet, not ours.</p>
         </div>
       </section>
 
@@ -120,7 +120,7 @@ export default function Home() {
           <button type="submit">View</button>
         </form>
         <p className="fineprint" style={{ margin: 0 }}>
-          Buying only happens by talking to the bot on X. This site shows what you own and lets you manage it —
+          Buying only happens by talking to the bot on X. This site shows what you own and lets you manage it:
           sell, withdraw, or export your key any time.
         </p>
       </section>
@@ -130,7 +130,7 @@ export default function Home() {
       <p className="fineprint">
         Not investment advice; tokens can go to zero. Robinhood Stock Tokens are
         not offered to U.S., Canadian, UK, or Swiss persons under the issuer’s
-        terms. Wallets are custodial until you export your key — which you can
+        terms. Wallets are custodial until you export your key, which you can
         do whenever you want.
       </p>
       <p className="fineprint"><a href="/terms">Terms of Service</a> · <a href="/privacy">Privacy Policy</a></p>

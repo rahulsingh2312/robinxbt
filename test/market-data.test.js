@@ -76,3 +76,40 @@ test("advertises only the read-only quote tool", async () => {
   assert.equal(tools.length, 1);
   assert.equal(tools[0].name, "get_quote");
 });
+
+test("an unknown ticker falls back to on-chain token data", async () => {
+  const data = new MarketData({
+    logger: silent,
+    fetcher: async (url) => {
+      const target = String(url);
+      if (target.includes("yahoo") || target.includes("stooq")) return { ok: false, status: 404 };
+      return jsonResponse({ pairs: [
+        { chainId: "solana", baseToken: { symbol: "PONS" }, priceUsd: "0.02779", priceChange: { h24: -4.2 }, liquidity: { usd: 27593335 }, fdv: 27799955 },
+        { chainId: "solana", baseToken: { symbol: "PONS" }, priceUsd: "0.03832", priceChange: { h24: 1.5 }, liquidity: { usd: 344516742 }, fdv: 382796241 },
+        { chainId: "base", baseToken: { symbol: "SCAM" }, priceUsd: "9.99", liquidity: { usd: 999999999 } }
+      ] });
+    }
+  });
+  const quote = await data.call("quote", { symbol: "PONS" });
+  // Deepest-liquidity pair for the matching symbol wins; the impostor is ignored.
+  assert.equal(quote.structured.price, 0.03832);
+  assert.equal(quote.structured.source, "dexscreener");
+  assert.equal(quote.structured.chain, "solana");
+  assert.match(quote.text, /344\.5M liquidity/);
+  assert.match(quote.text, /382\.8M FDV/);
+});
+
+test("a symbol nothing trades under still throws", async () => {
+  const data = new MarketData({
+    logger: silent,
+    fetcher: async (url) => String(url).includes("dexscreener")
+      ? jsonResponse({ pairs: [] })
+      : { ok: false, status: 404 }
+  });
+  await assert.rejects(() => data.call("quote", { symbol: "ZZQQX" }), /No quote for/);
+});
+
+test("quoteOrNull turns a miss into null instead of an error", async () => {
+  const data = new MarketData({ logger: silent, fetcher: async () => ({ ok: false, status: 404 }) });
+  assert.equal(await data.quoteOrNull("$NOPE"), null);
+});

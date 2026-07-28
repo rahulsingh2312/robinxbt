@@ -14,12 +14,22 @@ export class XClient {
   async getMentions(sinceId) {
     const url = new URL(`${API_URL}/users/${this.config.botUserId}/mentions`);
     url.searchParams.set("max_results", "20");
-    url.searchParams.set("expansions", "author_id");
+    // referenced_tweets.id pulls the parent post's full text into `includes`,
+    // which is the only way to answer "@bot is this true" — the mention alone
+    // carries no claim to judge.
+    url.searchParams.set("expansions", "author_id,referenced_tweets.id");
     url.searchParams.set("user.fields", "username,name");
-    // referenced_tweets is what links a "confirm" reply back to the basket the
-    // bot proposed in the post being replied to.
-    url.searchParams.set("tweet.fields", "referenced_tweets,conversation_id");
+    url.searchParams.set("tweet.fields", "referenced_tweets,conversation_id,text");
     if (sinceId) url.searchParams.set("since_id", sinceId);
+    const response = await fetch(url, { headers: this.headers("GET", url) });
+    return this.read(response);
+  }
+
+  // Single post lookup, for when a mention arrives without its parent already
+  // expanded — the stream and webhook paths do not always carry `includes`.
+  async getPost(postId) {
+    const url = new URL(`${API_URL}/tweets/${postId}`);
+    url.searchParams.set("tweet.fields", "text,author_id");
     const response = await fetch(url, { headers: this.headers("GET", url) });
     return this.read(response);
   }

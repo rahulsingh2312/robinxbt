@@ -84,9 +84,11 @@ export class MentionWorker {
     try {
       const response = await this.client.getMentions(await this.store.getLastMentionId(this.bot.botUsername));
       const usernames = new Map((response.includes?.users ?? []).map((user) => [user.id, user.username]));
+      const parents = new Map((response.includes?.tweets ?? []).map((tweet) => [tweet.id, tweet.text]));
       const posts = [...(response.data ?? [])].sort((first, second) => BigInt(first.id) < BigInt(second.id) ? -1 : 1);
       for (const post of posts) {
-        await this.handleMention({ ...post, username: usernames.get(post.author_id) });
+        const parent = (post.referenced_tweets ?? []).find((reference) => reference.type !== "retweeted");
+        await this.handleMention({ ...post, username: usernames.get(post.author_id), parentText: parents.get(parent?.id) });
         await this.store.setLastMentionId(this.bot.botUsername, post.id);
       }
       this.backoffUntil = 0;
@@ -186,9 +188,29 @@ export class MentionWorker {
     return null;
   }
 
+  // "@bot is this true" carries no claim on its own — the thing being judged
+  // lives in the post above it. Poll and stream expand it inline; anything
+  // else costs one extra read, which is why the expanded copy wins.
+  async parentContext(post) {
+    if (post.parentText) return post.parentText;
+    const parent = (post.referenced_tweets ?? []).find((reference) => reference.type !== "retweeted");
+    if (!parent || !this.client.getPost) return null;
+    try {
+      return (await this.client.getPost(parent.id))?.data?.text ?? null;
+    } catch (error) {
+      this.logger.warn(`Could not fetch parent post ${parent.id}: ${error.message}`);
+      return null;
+    }
+  }
+
   async agentReply(question, username, post) {
     try {
-      const answer = await this.answerer().ask(question);
+      const context = await this.parentContext(post);
+      const answer = await this.answerer().ask(
+        context
+          ? `The post they are replying to says:\n"""\n${context}\n"""\n\nTheir mention: ${question}`
+          : question
+      );
       const text = fitForPost(answer.text || "No read on that one.");
       // Only an authorized trader gets an actionable basket; everyone else
       // gets the analysis without a buy button.

@@ -21,7 +21,7 @@ const CRYPTO = {
 
 const QUOTE_TOOL = {
   name: "get_quote",
-  description: "Live quote for a stock or crypto symbol: price in USD plus percent change. Works for equities and ETFs (NVDA, SPY) and major tokens (BTC, DOGE).",
+  description: "Live quote for any ticker: stocks and ETFs (NVDA, SPY), major crypto (BTC, DOGE), and on-chain tokens including memecoins (PONS, WIF), which also return chain, liquidity, and FDV. Returns an error only when nothing anywhere is trading under that symbol.",
   inputSchema: {
     type: "object",
     properties: { symbol: { type: "string", description: "Ticker symbol, e.g. NVDA or BTC" } },
@@ -60,13 +60,58 @@ export class MarketData {
   }
 
   async quote(symbol) {
-    if (!/^[A-Z.^-]{1,10}$/.test(symbol)) throw new Error(`Not a symbol: ${symbol}`);
+    if (!/^[A-Z0-9.^-]{1,12}$/.test(symbol)) throw new Error(`Not a symbol: ${symbol}`);
     const cached = this.cache.get(symbol);
     if (cached && Date.now() - cached.at < this.cacheMs) return cached.result;
 
-    const result = CRYPTO[symbol] ? await this.crypto(symbol) : await this.stock(symbol);
+    // Majors resolve by name, listed equities by ticker, and anything left is
+    // probably an on-chain token — the long tail of memecoins people actually
+    // ask about, which no equity or major-crypto feed knows.
+    let result;
+    if (CRYPTO[symbol]) result = await this.crypto(symbol);
+    else {
+      try {
+        result = await this.stock(symbol);
+      } catch (error) {
+        this.logger.warn(`No equity quote for ${symbol}: ${error.message}`);
+        result = await this.token(symbol);
+      }
+    }
     this.cache.set(symbol, { at: Date.now(), result });
     return result;
+  }
+
+  // DexScreener indexes on-chain pairs across every major chain, no key needed.
+  // A popular ticker has dozens of impostor pairs, so the deepest-liquidity
+  // pair wins: a scam clone cannot fake the money actually sitting in a pool.
+  async token(symbol) {
+    const url = `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(symbol)}`;
+    const response = await this.fetcher(url, { signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) throw new Error(`DexScreener HTTP ${response.status}`);
+    const pairs = ((await response.json())?.pairs ?? [])
+      .filter((pair) => pair.baseToken?.symbol?.toUpperCase() === symbol && Number(pair.priceUsd) > 0)
+      .sort((first, second) => liquidity(second) - liquidity(first));
+    const best = pairs[0];
+    if (!best) throw new Error(`No quote for ${symbol}`);
+
+    const price = Number(best.priceUsd);
+    const change = Number(best.priceChange?.h24);
+    const structured = {
+      symbol,
+      price,
+      changePercent: Number.isFinite(change) ? change : null,
+      source: "dexscreener",
+      chain: best.chainId,
+      liquidityUsd: liquidity(best),
+      fdvUsd: Number(best.fdv) || null,
+      pairCount: pairs.length
+    };
+    const parts = [`${symbol} $${price.toPrecision(4)}`];
+    if (structured.changePercent !== null) parts.push(`(${structured.changePercent >= 0 ? "+" : ""}${structured.changePercent.toFixed(2)}% 24h)`);
+    // Liquidity is the tell for a memecoin: thin pools are the whole joke.
+    parts.push(`on ${best.chainId}`, `$${compact(structured.liquidityUsd)} liquidity`);
+    if (structured.fdvUsd) parts.push(`$${compact(structured.fdvUsd)} FDV`);
+    return { text: parts.join(" · "), structured };
   }
 
   async stock(symbol) {
@@ -125,6 +170,17 @@ export class MarketData {
     }
   }
 
+  // A tool error reads to the model as "this does not exist", which is wrong
+  // and was getting real tokens dismissed as imaginary. Callers that want a
+  // soft miss use this instead.
+  async quoteOrNull(symbol) {
+    try {
+      return await this.quote(String(symbol).toUpperCase().replace(/^\$/, ""));
+    } catch {
+      return null;
+    }
+  }
+
   shape(symbol, price, changePercent, source) {
     const move = changePercent === null ? "" : ` (${changePercent >= 0 ? "+" : ""}${changePercent.toFixed(2)}% ${CRYPTO[symbol] ? "24h" : "today"})`;
     return {
@@ -132,4 +188,12 @@ export class MarketData {
       structured: { symbol, price, changePercent, source }
     };
   }
+}
+
+function liquidity(pair) {
+  return Number(pair?.liquidity?.usd) || 0;
+}
+
+function compact(value) {
+  return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
 }

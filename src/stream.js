@@ -2,8 +2,8 @@
 // connection, which works from behind NAT — no public URL required. Polling
 // stays on as a backstop; claimMention in the worker dedupes double delivery.
 const STREAM_URL = "https://api.x.com/2/tweets/search/stream"
-  + "?tweet.fields=author_id,referenced_tweets,conversation_id"
-  + "&expansions=author_id&user.fields=username";
+  + "?tweet.fields=author_id,referenced_tweets,conversation_id,text"
+  + "&expansions=author_id,referenced_tweets.id&user.fields=username";
 
 export class MentionStream {
   constructor({ bearerToken, worker, logger = console }) {
@@ -79,11 +79,13 @@ export class MentionStream {
     const post = payload.data;
     if (!post?.id || !post.text) return;
     const username = (payload.includes?.users ?? []).find((user) => user.id === post.author_id)?.username;
+    const parent = (post.referenced_tweets ?? []).find((reference) => reference.type !== "retweeted");
+    const parentText = (payload.includes?.tweets ?? []).find((tweet) => tweet.id === parent?.id)?.text;
     // The bot's own replies match the @mention rule too — never answer them,
     // or every reply would spawn another reply forever.
     if (String(post.author_id) === String(this.worker.bot.botUserId ?? "")) return;
     await this.worker
-      .handleMention({ ...post, username })
+      .handleMention({ ...post, username, parentText })
       .catch((error) => this.logger.error(`Stream mention ${post.id} failed: ${error.message}`));
   }
 }

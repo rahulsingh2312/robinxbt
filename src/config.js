@@ -32,7 +32,43 @@ export function loadConfig() {
       reasoningEffort: process.env.LLM_REASONING_EFFORT ?? "low"
     },
     persona: loadPersona(),
-    replyCaps: loadReplyCaps()
+    replyCaps: loadReplyCaps(),
+    onchain: loadOnchain()
+  };
+}
+
+// Per-user custodial wallets on Robinhood Chain. Everything here is opt-in:
+// with ONCHAIN_ENABLED unset the bot behaves exactly as before.
+function loadOnchain() {
+  const enabled = process.env.ONCHAIN_ENABLED === "true";
+  const walletEncKey = process.env.WALLET_ENC_KEY ?? "";
+  // Refused at startup: generating wallets that cannot be encrypted, or
+  // encrypting with a weak key, silently loses user money later.
+  if (enabled && !/^[0-9a-fA-F]{64}$/.test(walletEncKey)) {
+    throw new Error("ONCHAIN_ENABLED=true requires WALLET_ENC_KEY: 64 hex chars, e.g. from `openssl rand -hex 32`");
+  }
+  const maxOrderUsd = Number(process.env.ONCHAIN_MAX_ORDER_USD ?? 100);
+  const slippageBps = Number(process.env.ONCHAIN_SLIPPAGE_BPS ?? 100);
+  const gasReserveEth = Number(process.env.ONCHAIN_GAS_RESERVE_ETH ?? 0.0002);
+  if (!Number.isFinite(maxOrderUsd) || maxOrderUsd <= 0) throw new Error("ONCHAIN_MAX_ORDER_USD must be a positive number");
+  if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > 3000) throw new Error("ONCHAIN_SLIPPAGE_BPS must be an integer between 1 and 3000");
+  if (!Number.isFinite(gasReserveEth) || gasReserveEth < 0) throw new Error("ONCHAIN_GAS_RESERVE_ETH must be >= 0");
+  return {
+    enabled,
+    walletEncKey,
+    rpcUrl: process.env.ROBINHOOD_CHAIN_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
+    blockscoutBaseUrl: process.env.ROBINHOOD_CHAIN_EXPLORER ?? "https://robinhoodchain.blockscout.com",
+    maxOrderUsd,
+    slippageBps,
+    gasReserveEth,
+    // The Next.js site proxies /auth and /api to this server, so the OAuth
+    // redirect URI must be built from the SITE's origin, not this server's.
+    siteBaseUrl: (process.env.SITE_BASE_URL ?? process.env.PUBLIC_BASE_URL ?? `http://localhost:${process.env.PORT ?? 3000}`).replace(/\/$/, ""),
+    oauth: {
+      clientId: process.env.X_CLIENT_ID ?? "",
+      clientSecret: process.env.X_CLIENT_SECRET ?? ""
+    },
+    sessionSecret: process.env.SESSION_SECRET ?? ""
   };
 }
 

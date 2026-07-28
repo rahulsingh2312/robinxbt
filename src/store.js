@@ -117,6 +117,45 @@ export class Store {
     return this.data.spend?.[`${botUsername.toLowerCase()}:${day}`] ?? 0;
   }
 
+  // Wallets are keyed by numeric author ID (stable), with a username index
+  // maintained on write so the portfolio site can look up by handle.
+  async getWalletByAuthor(botUsername, authorId) {
+    return this.data.wallets?.[this.userKey(botUsername, authorId)] ?? null;
+  }
+
+  async setWallet(botUsername, authorId, record) {
+    this.data.wallets ??= {};
+    this.data.walletIndex ??= {};
+    this.data.wallets[this.userKey(botUsername, authorId)] = record;
+    if (record.xUsername) this.data.walletIndex[this.userKey(botUsername, record.xUsername)] = String(authorId);
+    await this.save();
+  }
+
+  async getWalletByUsername(botUsername, xUsername) {
+    const authorId = this.data.walletIndex?.[this.userKey(botUsername, xUsername)];
+    if (!authorId) return null;
+    const record = await this.getWalletByAuthor(botUsername, authorId);
+    return record ? { ...record, authorId } : null;
+  }
+
+  // A buy the bot proposed but that still needs an amount, keyed by the ID of
+  // the bot's own reply — mirrors the pending-basket pattern.
+  async savePendingBuy(botUsername, postId, buy) {
+    this.data.pendingBuys ??= {};
+    this.data.pendingBuys[this.userKey(botUsername, postId)] = { ...buy, createdAt: new Date().toISOString() };
+    await this.save();
+  }
+
+  async getPendingBuy(botUsername, postId) {
+    return this.data.pendingBuys?.[this.userKey(botUsername, postId)] ?? null;
+  }
+
+  async clearPendingBuy(botUsername, postId) {
+    if (!this.data.pendingBuys) return;
+    delete this.data.pendingBuys[this.userKey(botUsername, postId)];
+    await this.save();
+  }
+
   async getLastMentionId(botUsername) {
     return this.data.state[botUsername.toLowerCase()]?.lastMentionId ?? null;
   }

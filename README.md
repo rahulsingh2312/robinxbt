@@ -28,6 +28,57 @@ never touches a brokerage.
 Placing orders for other people's accounts would also be regulated activity in
 the US. Do not repurpose the allowlist to trade on someone else's behalf.
 
+## On-chain wallets on Robinhood Chain (`ONCHAIN_ENABLED`)
+
+The scope limit above applies to Robinhood *brokerage* accounts. The on-chain
+mode is different: every X user who mentions the bot gets their **own wallet on
+Robinhood Chain** (Robinhood's Arbitrum-based L2, chain id 4663, mainnet since
+July 2026), and buys spend **their** deposited ETH, never yours.
+
+The conversation loop:
+
+1. Any mention lazily creates a wallet for that author (keyed by numeric X
+   user ID, so handle changes cannot move funds).
+2. The user asks for advice; the bot answers as usual, mentioning tickers.
+3. The user replies "buy" — the asset comes from the bot's own advice, a
+   `$TICKER`, or a raw contract address. If no size was given the bot asks and
+   remembers the ask; a bare `$50` reply then fills it.
+4. No funds? The reply contains their deposit address and asks them to send
+   ETH on Robinhood Chain.
+5. Funded? The bot swaps ETH for the token through Uniswap v4 (verified stock
+   tokens and memecoins both resolve through the chain's Blockscout index;
+   ambiguous or unverified tickers fail closed) and replies telling them to
+   check the portfolio link in bio.
+
+Safety systems: per-order USD cap (`ONCHAIN_MAX_ORDER_USD`), slippage bound
+enforced on-chain (`ONCHAIN_SLIPPAGE_BPS`), scam-ticker rejection, exactly-once
+fills per tweet, `X_DRY_RUN` honored end to end, and private keys encrypted at
+rest with `WALLET_ENC_KEY` (AES-256-GCM).
+
+### The portfolio site (`web/`)
+
+`web/` is a Next.js app: `npm install && npm run dev` inside `web/` (set
+`BOT_SERVER_URL` if the bot server is not on `localhost:3000`). Put its public
+URL in the bot's X bio — replies deliberately say "link in bio" instead of
+carrying a URL (posts with links cost 13x). Anyone can view a handle's
+holdings; **Sign in with X** (set `X_CLIENT_ID`, register the redirect URI
+`{SITE_BASE_URL}/auth/x/callback`) unlocks withdrawing to any address and
+exporting the private key, so users can always exit your custody.
+
+### Read this before enabling
+
+- **You are a custodian.** The store (JSON file or Postgres) plus
+  `WALLET_ENC_KEY` together control every user's money. Protect both, back up
+  the key offline, and assume a leak of either is a total loss.
+- **This is likely regulated activity** (money transmission and possibly
+  broker-dealer territory, depending on jurisdiction). Get real legal advice
+  before running this for strangers.
+- **Robinhood Stock Tokens are not offered to U.S. persons** (nor in Canada,
+  the UK, or Switzerland) under the issuer's terms. The site footer says so;
+  it is on you to keep your audience compliant.
+- The public RPC is rate limited; use a dedicated Robinhood Chain RPC
+  provider in production, and prefer Postgres over the JSON store.
+
 ## Run locally
 
 ```bash

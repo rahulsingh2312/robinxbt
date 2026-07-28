@@ -2,6 +2,7 @@ import { publicSummary } from "./portfolio.js";
 import { looksLikeTrade, parseOrder } from "./trading.js";
 import { fitForPost, limitCashtags } from "./insiders.js";
 import { describeBook } from "./paper-broker.js";
+import { parseBuyIntent } from "./onchain-broker.js";
 
 // Words that look like tickers but never are, so a basket is not built from
 // the agent's own prose.
@@ -18,7 +19,7 @@ function extractSymbols(text, limit = 4) {
 export class MentionWorker {
   // No reply may contain a URL. X charges $0.20 for a post with a link versus
   // $0.015 without, so the public base URL is deliberately not available here.
-  constructor({ store, client, bot, logger = console, broker = null, limits = null, insiders = null, llm = null, replyCaps = null }) {
+  constructor({ store, client, bot, logger = console, broker = null, limits = null, insiders = null, llm = null, replyCaps = null, onchain = null }) {
     this.store = store;
     this.client = client;
     this.bot = bot;
@@ -27,6 +28,10 @@ export class MentionWorker {
     this.limits = limits;
     this.insiders = insiders;
     this.llm = llm;
+    // Per-user on-chain wallets. When set, buy intents fill from the author's
+    // own Robinhood Chain wallet and the operator-account order flow is
+    // bypassed entirely.
+    this.onchain = onchain;
     this.running = false;
     // Every reply costs an LLM turn plus ~$0.015 on X. Another bot that
     // answers our replies produces an unbounded ping-pong that drains the
@@ -116,7 +121,15 @@ export class MentionWorker {
       return;
     }
     const username = post.username ?? "there";
+    // Every interaction provisions a wallet, so by the time someone wants to
+    // buy, the deposit address already exists. Creation is local key-gen plus
+    // a store write — no RPC — so it cannot slow the reply path.
+    if (this.onchain && post.author_id) {
+      await this.onchain.ensureWallet(this.bot.botUsername, post.author_id, post.username)
+        .catch((error) => this.logger.warn(`Wallet provisioning failed for ${post.author_id}`, error.message));
+    }
     this.pendingBasket = null;
+    this.pendingOnchainBuy = null;
     const reply = await this.commandReply(post.text, username, post);
     if (reply === null) return;
     if (this.bot.dryRun) {
@@ -143,15 +156,29 @@ export class MentionWorker {
       await this.store.savePendingBasket(this.bot.botUsername, sentId, this.pendingBasket);
     }
     this.pendingBasket = null;
+    // Same shape as baskets: a "how much?" ask is only answerable by a reply
+    // to the exact post that asked, so it is keyed by our own reply ID.
+    if (this.pendingOnchainBuy && sentId) {
+      await this.store.savePendingBuy(this.bot.botUsername, sentId, this.pendingOnchainBuy);
+    }
+    this.pendingOnchainBuy = null;
     this.logger.info(`Replied to ${post.id} (@${username}) as ${sentId ?? "unknown"}: ${reply}`);
   }
 
   async commandReply(text, username, post = {}) {
-    const order = parseOrder(text, this.bot.botUsername);
-    if (order) return this.executeOrder(order, username, post);
+    if (this.onchain) {
+      const onchainReply = await this.onchainReply(text, username, post);
+      if (onchainReply !== undefined) return onchainReply;
+    } else {
+      const order = parseOrder(text, this.bot.botUsername);
+      if (order) return this.executeOrder(order, username, post);
+    }
 
     const command = text.replace(new RegExp(`@${this.bot.botUsername}\\b`, "ig"), "").trim().toLowerCase();
     if (/^portfolio\b/.test(command)) {
+      if (this.onchain && post.author_id) {
+        return this.onchain.describePortfolio(this.bot.botUsername, post.author_id, username);
+      }
       // Paper book first: anyone who has traded through the bot gets their
       // simulated holdings back on ask.
       if (post.author_id && this.store.getPaperBook) {
@@ -175,6 +202,60 @@ export class MentionWorker {
       return `I couldn’t read that as an order. Use “buy 5 AAPL” or “buy $500 of AAPL”.`;
     }
     return `Try “portfolio” for an opt-in public portfolio, or “buy 5 AAPL” if you’re authorized to trade.`;
+  }
+
+  // Decides whether a mention is an on-chain buy. Returns undefined to fall
+  // through to advice/LLM handling — only clear intent moves money.
+  async onchainReply(text, username, post) {
+    const intent = parseBuyIntent(text, this.bot.botUsername);
+    // A bare "$50" only means something as an answer to our own "how much?"
+    // ask, which the pending record proves.
+    const pending = await this.pendingBuyFor(post);
+    if (pending && String(post.author_id) === pending.authorId && (intent?.amountUsd ?? null) !== null) {
+      return this.runOnchainBuy({ intent: intent ?? { wantsBuy: false, amountUsd: null, term: null }, pendingBuy: pending, post, username });
+    }
+    if (intent?.wantsBuy) {
+      // "should I buy NVDA?" is a question for the analyst, not an order.
+      if (/\?/.test(text) && intent.amountUsd === null) return undefined;
+      return this.runOnchainBuy({ intent, post, username });
+    }
+    if (/\bsell\b/i.test(text) && !/\?/.test(text)) {
+      return `Selling and withdrawals live on your portfolio page — link in bio.`;
+    }
+    return undefined;
+  }
+
+  async runOnchainBuy({ intent, pendingBuy = null, post, username }) {
+    // Claimed before any chain call: a crash after the swap must not let the
+    // retry path fill the same tweet twice.
+    if (post.id && !(await this.store.claimOrder(this.bot.botUsername, post.id))) return null;
+    try {
+      const parentText = await this.parentContext(post);
+      const result = await this.onchain.handleBuy({
+        botUsername: this.bot.botUsername,
+        authorId: post.author_id,
+        username,
+        intent,
+        parentText,
+        pendingBuy,
+        dryRun: this.bot.dryRun
+      });
+      if (pendingBuy) await this.store.clearPendingBuy(this.bot.botUsername, pendingBuy.postId);
+      if (result.pendingBuy) this.pendingOnchainBuy = result.pendingBuy;
+      return fitForPost(result.reply);
+    } catch (error) {
+      this.logger.error(`Onchain buy failed for post ${post.id}`, error);
+      return `Couldn’t place that buy: ${String(error.message).slice(0, 100)}`;
+    }
+  }
+
+  async pendingBuyFor(post) {
+    const parents = (post.referenced_tweets ?? []).filter((ref) => ref.type === "replied_to");
+    for (const parent of parents) {
+      const pending = await this.store.getPendingBuy?.(this.bot.botUsername, parent.id);
+      if (pending) return { ...pending, postId: parent.id };
+    }
+    return null;
   }
 
   // Resolves the basket attached to whichever post this one replies to.

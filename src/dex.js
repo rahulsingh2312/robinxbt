@@ -1,0 +1,173 @@
+import { AbiCoder, Contract, ZeroAddress } from "ethers";
+
+// Uniswap v4 on Robinhood Chain (chain id 4663), from the official Uniswap
+// deployment registry. Stock Tokens and memecoins both trade here; the USDG
+// stablecoin is the quote asset for most stock pools, ETH for most memecoins.
+export const DEX_ADDRESSES = {
+  universalRouter: "0x8876789976decbfcbbbe364623c63652db8c0904",
+  quoter: "0x8dc178efb8111bb0973dd9d722ebeff267c98f94",
+  weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
+  usdg: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168"
+};
+
+// In v4 the native coin is currency address(0); no WETH wrapping, and an
+// ETH-in swap needs no token approval at all — which is why the bot only ever
+// buys with ETH. That keeps user funds one signature away from the pool.
+export const NATIVE = ZeroAddress;
+
+const QUOTER_ABI = [
+  "function quoteExactInputSingle(((address currency0, address currency1, uint24 fee, int24 tickSpacing, address hooks) poolKey, bool zeroForOne, uint128 exactAmount, bytes hookData) params) returns (uint256 amountOut, uint256 gasEstimate)",
+  "function quoteExactInput((address exactCurrency, (address intermediateCurrency, uint24 fee, int24 tickSpacing, address hooks, bytes hookData)[] path, uint128 exactAmount) params) returns (uint256 amountOut, uint256 gasEstimate)"
+];
+
+const ROUTER_ABI = ["function execute(bytes commands, bytes[] inputs, uint256 deadline) payable"];
+
+// Universal Router command / v4 action bytes, from Commands.sol and Actions.sol.
+const V4_SWAP = "0x10";
+const ACTIONS = { SWAP_EXACT_IN_SINGLE: 0x06, SWAP_EXACT_IN: 0x07, SETTLE_ALL: 0x0c, TAKE_ALL: 0x0f };
+
+// Standard hookless fee tiers. Pools with hooks (dynamic fees, market-hours
+// gates) cannot be guessed, so discovery can be extended per token via the
+// registry the resolver returns.
+const FEE_TIERS = [[100, 1], [500, 10], [3000, 60], [10000, 200]];
+
+const coder = AbiCoder.defaultAbiCoder();
+
+function sortCurrencies(a, b) {
+  return BigInt(a) < BigInt(b) ? [a, b] : [b, a];
+}
+
+export class Dex {
+  constructor({ provider, addresses = DEX_ADDRESSES, slippageBps = 100 }) {
+    this.provider = provider;
+    this.addresses = addresses;
+    this.slippageBps = slippageBps;
+    this.quoterContract = new Contract(addresses.quoter, QUOTER_ABI, provider);
+    this.usdgMetaCache = null;
+  }
+
+  poolKey(tokenA, tokenB, fee, tickSpacing) {
+    const [currency0, currency1] = sortCurrencies(tokenA, tokenB);
+    return { currency0, currency1, fee, tickSpacing, hooks: ZeroAddress };
+  }
+
+  async quoteSingle(tokenIn, tokenOut, fee, tickSpacing, amountIn) {
+    const key = this.poolKey(tokenIn, tokenOut, fee, tickSpacing);
+    const zeroForOne = key.currency0.toLowerCase() === tokenIn.toLowerCase();
+    const [amountOut] = await this.quoterContract.quoteExactInputSingle.staticCall({
+      poolKey: key, zeroForOne, exactAmount: amountIn, hookData: "0x"
+    });
+    return { kind: "single", poolKey: key, zeroForOne, amountOut };
+  }
+
+  async quotePath(tokenIn, path, amountIn) {
+    const [amountOut] = await this.quoterContract.quoteExactInput.staticCall({
+      exactCurrency: tokenIn, path, exactAmount: amountIn
+    });
+    return { kind: "path", tokenIn, path, amountOut };
+  }
+
+  // Tries every hookless candidate route from ETH to the token — direct pools
+  // on each fee tier plus two-hop through USDG — and keeps whichever quotes
+  // the most output. A token with no live pool yields null, which the caller
+  // turns into an honest "no market" reply instead of a revert.
+  async findBestRoute(tokenOut, amountInWei) {
+    const attempts = [];
+    for (const [fee, tickSpacing] of FEE_TIERS) {
+      attempts.push(this.quoteSingle(NATIVE, tokenOut, fee, tickSpacing, amountInWei).catch(() => null));
+    }
+    for (const [fee1, tick1] of FEE_TIERS) {
+      for (const [fee2, tick2] of FEE_TIERS) {
+        const path = [
+          { intermediateCurrency: this.addresses.usdg, fee: fee1, tickSpacing: tick1, hooks: ZeroAddress, hookData: "0x" },
+          { intermediateCurrency: tokenOut, fee: fee2, tickSpacing: tick2, hooks: ZeroAddress, hookData: "0x" }
+        ];
+        attempts.push(this.quotePath(NATIVE, path, amountInWei).catch(() => null));
+      }
+    }
+    const routes = (await Promise.all(attempts)).filter(Boolean).filter((route) => route.amountOut > 0n);
+    if (routes.length === 0) return null;
+    return routes.reduce((best, route) => (route.amountOut > best.amountOut ? route : best));
+  }
+
+  // USD sizing runs through the ETH/USDG pool: how many dollars one ETH buys
+  // right now IS the exchange rate the user's buy will actually clear at.
+  async ethUsdPrice() {
+    const oneEth = 10n ** 18n;
+    const route = await this.findBestUsdgRoute(oneEth);
+    if (!route) throw new Error("No ETH/USDG pool found to price USD orders");
+    const decimals = await this.usdgDecimals();
+    return Number(route.amountOut) / 10 ** decimals;
+  }
+
+  async findBestUsdgRoute(amountInWei) {
+    const attempts = FEE_TIERS.map(([fee, tick]) =>
+      this.quoteSingle(NATIVE, this.addresses.usdg, fee, tick, amountInWei).catch(() => null)
+    );
+    const routes = (await Promise.all(attempts)).filter(Boolean).filter((route) => route.amountOut > 0n);
+    return routes.length ? routes.reduce((best, route) => (route.amountOut > best.amountOut ? route : best)) : null;
+  }
+
+  async usdgDecimals() {
+    if (this.usdgMetaCache === null) {
+      const usdg = new Contract(this.addresses.usdg, ["function decimals() view returns (uint8)"], this.provider);
+      this.usdgMetaCache = Number(await usdg.decimals());
+    }
+    return this.usdgMetaCache;
+  }
+
+  minOut(amountOut) {
+    return (amountOut * BigInt(10000 - this.slippageBps)) / 10000n;
+  }
+
+  // Encodes UniversalRouter.execute for an exact-in ETH -> token swap.
+  // SETTLE_ALL pays the router's ETH in, TAKE_ALL sweeps the full token
+  // output back to the sender, and minOut makes slippage revert on-chain
+  // rather than fill badly.
+  buildSwapCalldata(route, tokenOut, amountInWei, minAmountOut, deadline) {
+    let actions;
+    let swapParams;
+    if (route.kind === "single") {
+      actions = Buffer.from([ACTIONS.SWAP_EXACT_IN_SINGLE, ACTIONS.SETTLE_ALL, ACTIONS.TAKE_ALL]);
+      swapParams = coder.encode(
+        ["tuple(tuple(address,address,uint24,int24,address),bool,uint128,uint128,bytes)"],
+        [[
+          [route.poolKey.currency0, route.poolKey.currency1, route.poolKey.fee, route.poolKey.tickSpacing, route.poolKey.hooks],
+          route.zeroForOne, amountInWei, minAmountOut, "0x"
+        ]]
+      );
+    } else {
+      actions = Buffer.from([ACTIONS.SWAP_EXACT_IN, ACTIONS.SETTLE_ALL, ACTIONS.TAKE_ALL]);
+      swapParams = coder.encode(
+        ["tuple(address,tuple(address,uint24,int24,address,bytes)[],uint128,uint128)"],
+        [[
+          route.tokenIn,
+          route.path.map((hop) => [hop.intermediateCurrency, hop.fee, hop.tickSpacing, hop.hooks, hop.hookData]),
+          amountInWei, minAmountOut
+        ]]
+      );
+    }
+    const params = [
+      swapParams,
+      coder.encode(["address", "uint256"], [NATIVE, amountInWei]),
+      coder.encode(["address", "uint256"], [tokenOut, minAmountOut])
+    ];
+    const input = coder.encode(["bytes", "bytes[]"], ["0x" + actions.toString("hex"), params]);
+    return { commands: V4_SWAP, inputs: [input], deadline };
+  }
+
+  // Quotes, applies slippage, sends, and waits for inclusion. `signer` holds
+  // the buyer's own key; the value sent is exactly amountInWei.
+  async swapEthForToken(signer, tokenOut, amountInWei) {
+    const route = await this.findBestRoute(tokenOut, amountInWei);
+    if (!route) throw new Error("no liquidity route found for this token");
+    const minAmountOut = this.minOut(route.amountOut);
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 120);
+    const { commands, inputs } = this.buildSwapCalldata(route, tokenOut, amountInWei, minAmountOut, deadline);
+    const router = new Contract(this.addresses.universalRouter, ROUTER_ABI, signer);
+    const tx = await router.execute(commands, inputs, deadline, { value: amountInWei });
+    const receipt = await tx.wait();
+    if (receipt.status !== 1) throw new Error(`swap reverted in tx ${receipt.hash}`);
+    return { hash: receipt.hash, quotedOut: route.amountOut, minAmountOut, route: route.kind };
+  }
+}

@@ -1,0 +1,32 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: #0b1020;
+  color: #e8eaf0;
+  font: 16px/1.5 system-ui, sans-serif;
+}
+main { max-width: 720px; margin: 48px auto; padding: 0 24px; }
+a { color: #7dd3fc; }
+.eyebrow { color: #7dd3fc; font-size: .75rem; font-weight: 700; letter-spacing: .12em; }
+.muted { color: #a4adc2; }
+.card { background: #141b31; border-radius: 14px; padding: 22px; margin: 20px 0; }
+.total { display: flex; justify-content: space-between; align-items: center; }
+.total strong { font-size: 1.6rem; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 12px 0; border-bottom: 1px solid #27324d; text-align: right; }
+th:first-child, td:first-child { text-align: left; }
+input, button, select {
+  font: inherit;
+  border-radius: 10px;
+  border: 1px solid #27324d;
+  background: #0b1020;
+  color: #e8eaf0;
+  padding: 10px 14px;
+}
+button { background: #7dd3fc; color: #0b1020; font-weight: 700; border: 0; cursor: pointer; }
+button.danger { background: #fda4af; }
+button:disabled { opacity: .5; cursor: default; }
+form.row { display: flex; gap: 10px; flex-wrap: wrap; }
+.address { font-family: ui-monospace, monospace; font-size: .85rem; word-break: break-all; }
+.warn { color: #fda4af; font-size: .85rem; }
+.risk { margin-top: 28px; color: #a4adc2; font-size: .8rem; }

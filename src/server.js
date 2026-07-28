@@ -19,6 +19,12 @@ import { GORK_NO_DATA_PROMPT, GORK_POST_SEEDS, GORK_SYSTEM_PROMPT } from "./pers
 import { Shitposter } from "./shitposter.js";
 import { StyleCorpus } from "./style-corpus.js";
 import { MarketData } from "./market-data.js";
+import { WalletVault } from "./wallet-vault.js";
+import { ChainClient } from "./chain.js";
+import { Dex } from "./dex.js";
+import { AssetResolver } from "./asset-resolver.js";
+import { OnchainBroker } from "./onchain-broker.js";
+import { OnchainApi } from "./onchain-api.js";
 
 const config = loadConfig();
 const store = config.databaseUrl ? new PostgresStore(config.databaseUrl) : new Store(config.dataFile);
@@ -72,6 +78,23 @@ const llm = config.llm.enabled
   : null;
 if (config.llm.enabled && !llm.configured()) throw new Error("LLM_ENABLED=true requires LLM_API_KEY");
 
+// Per-user wallets on Robinhood Chain. When enabled, every interacting user
+// gets a custodial wallet and buy intents fill from THEIR deposited funds —
+// the operator-account trading path above is bypassed for mentions.
+let onchain = null;
+let onchainApi = null;
+if (config.onchain.enabled) {
+  const vault = new WalletVault(config.onchain.walletEncKey);
+  const chain = new ChainClient({ rpcUrl: config.onchain.rpcUrl });
+  const dex = new Dex({ provider: chain.provider, slippageBps: config.onchain.slippageBps });
+  const resolver = new AssetResolver({ baseUrl: config.onchain.blockscoutBaseUrl });
+  onchain = new OnchainBroker({ store, vault, chain, dex, resolver, config: config.onchain });
+  onchainApi = new OnchainApi({ config, store, vault, chain, onchain });
+  if (!onchainApi.oauthReady()) {
+    console.warn("Onchain mode is on but X_CLIENT_ID is missing: the portfolio site will be read-only (no sign-in, withdraw, or key export).");
+  }
+}
+
 const workers = config.bots.map((bot) => new MentionWorker({
   store,
   client: new XClient(bot),
@@ -80,7 +103,8 @@ const workers = config.bots.map((bot) => new MentionWorker({
   limits,
   insiders,
   llm,
-  replyCaps: config.replyCaps
+  replyCaps: config.replyCaps,
+  onchain
 }));
 
 const server = createServer(async (request, response) => {
@@ -134,7 +158,8 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 async function route(request, response) {
   const url = new URL(request.url, config.publicBaseUrl);
-  if (request.method === "GET" && url.pathname === "/health") return sendJson(response, 200, { ok: true, database: config.databaseUrl ? "postgres" : "json", trading: { enabled: config.trading.enabled, maxOrderUsd: config.trading.maxOrderUsd, dailyMaxUsd: config.trading.dailyMaxUsd, authorizedTraders: config.trading.allowedAuthorIds.length }, bots: config.bots.map((bot, index) => ({ username: bot.botUsername, xPolling: workers[index].client.configured(), dryRun: bot.dryRun })) });
+  if (request.method === "GET" && url.pathname === "/health") return sendJson(response, 200, { ok: true, database: config.databaseUrl ? "postgres" : "json", trading: { enabled: config.trading.enabled, maxOrderUsd: config.trading.maxOrderUsd, dailyMaxUsd: config.trading.dailyMaxUsd, authorizedTraders: config.trading.allowedAuthorIds.length }, onchain: { enabled: config.onchain.enabled, signIn: Boolean(onchainApi?.oauthReady()), maxOrderUsd: config.onchain.maxOrderUsd }, bots: config.bots.map((bot, index) => ({ username: bot.botUsername, xPolling: workers[index].client.configured(), dryRun: bot.dryRun })) });
+  if (onchainApi && (await onchainApi.route(request, response, url))) return;
   if (url.pathname === "/webhooks/x") return xWebhook(request, response, url);
   if (request.method === "GET" && url.pathname === "/setup") return sendHtml(response, 200, setupPage());
   if (request.method === "GET" && url.pathname.startsWith("/p/")) return publicPortfolio(response, url.pathname);

@@ -51,6 +51,30 @@ export class PostgresStore {
       )
     `);
     await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS xbot_wallets (
+        bot_username TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        x_username TEXT,
+        data JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (bot_username, author_id)
+      )
+    `);
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS xbot_wallets_by_username
+      ON xbot_wallets (bot_username, x_username)
+    `);
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS xbot_pending_buys (
+        bot_username TEXT NOT NULL,
+        post_id TEXT NOT NULL,
+        data JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (bot_username, post_id)
+      )
+    `);
+    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS xbot_spend (
         bot_username TEXT NOT NULL,
         day DATE NOT NULL,
@@ -136,6 +160,58 @@ export class PostgresStore {
        ON CONFLICT (bot_username, x_username)
        DO UPDATE SET data = EXCLUDED.data, updated_at = now()`,
       [botUsername.toLowerCase(), username.toLowerCase(), JSON.stringify(user)]
+    );
+  }
+
+  async getWalletByAuthor(botUsername, authorId) {
+    const result = await this.pool.query(
+      "SELECT data FROM xbot_wallets WHERE bot_username = $1 AND author_id = $2",
+      [botUsername.toLowerCase(), String(authorId)]
+    );
+    return result.rows[0]?.data ?? null;
+  }
+
+  async setWallet(botUsername, authorId, record) {
+    await this.pool.query(
+      `INSERT INTO xbot_wallets (bot_username, author_id, x_username, data)
+       VALUES ($1, $2, $3, $4::jsonb)
+       ON CONFLICT (bot_username, author_id)
+       DO UPDATE SET data = EXCLUDED.data, x_username = EXCLUDED.x_username, updated_at = now()`,
+      [botUsername.toLowerCase(), String(authorId), record.xUsername ?? null, JSON.stringify(record)]
+    );
+  }
+
+  async getWalletByUsername(botUsername, xUsername) {
+    const result = await this.pool.query(
+      `SELECT author_id, data FROM xbot_wallets
+       WHERE bot_username = $1 AND x_username = $2
+       ORDER BY updated_at DESC LIMIT 1`,
+      [botUsername.toLowerCase(), xUsername.toLowerCase()]
+    );
+    const row = result.rows[0];
+    return row ? { ...row.data, authorId: row.author_id } : null;
+  }
+
+  async savePendingBuy(botUsername, postId, buy) {
+    await this.pool.query(
+      `INSERT INTO xbot_pending_buys (bot_username, post_id, data) VALUES ($1, $2, $3::jsonb)
+       ON CONFLICT (bot_username, post_id) DO UPDATE SET data = EXCLUDED.data`,
+      [botUsername.toLowerCase(), String(postId), JSON.stringify(buy)]
+    );
+  }
+
+  async getPendingBuy(botUsername, postId) {
+    const result = await this.pool.query(
+      "SELECT data FROM xbot_pending_buys WHERE bot_username = $1 AND post_id = $2",
+      [botUsername.toLowerCase(), String(postId)]
+    );
+    return result.rows[0]?.data ?? null;
+  }
+
+  async clearPendingBuy(botUsername, postId) {
+    await this.pool.query(
+      "DELETE FROM xbot_pending_buys WHERE bot_username = $1 AND post_id = $2",
+      [botUsername.toLowerCase(), String(postId)]
     );
   }
 

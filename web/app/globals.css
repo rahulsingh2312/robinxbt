@@ -250,20 +250,30 @@ input, select {
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 12px 18px;
+  border-radius: 12px;
+  padding: 12px 16px;
   min-width: 0;
 }
+/* Our own dropdown face, not the platform's. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23898984' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 36px;
+}
+select option { background: var(--surface); color: var(--ink); }
 input::placeholder { color: var(--muted); }
 input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
-button {
+button, a.btn {
   font: inherit; font-weight: 600; font-size: 0.92rem;
   border: 1px solid var(--accent);
-  border-radius: 999px;
-  padding: 12px 22px;
+  border-radius: 12px;
+  padding: 12px 20px;
   background: var(--accent);
   background-image: var(--btn-sheen);
   color: var(--accent-ink);
@@ -271,7 +281,8 @@ button {
   box-shadow: var(--shadow);
   transition: transform 0.12s ease, opacity 0.12s ease;
 }
-button:hover { opacity: 0.94; transform: translateY(-1px); }
+button:hover, a.btn:hover { opacity: 0.94; transform: translateY(-1px); }
+a.btn { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; color: var(--accent-ink); cursor: pointer; background: var(--accent); background-image: var(--btn-sheen); box-shadow: var(--shadow); }
 button.quiet {
   background: var(--surface); background-image: var(--card-sheen);
   color: var(--ink); border-color: var(--line);
@@ -279,11 +290,26 @@ button.quiet {
 button.danger { background: transparent; background-image: none; color: var(--danger); border-color: var(--danger); box-shadow: none; }
 button:disabled { opacity: 0.45; cursor: default; transform: none; }
 a.btn-quiet {
-  display: inline-flex; align-items: center;
+  display: inline-flex; align-items: center; gap: 6px;
   font-weight: 600; font-size: 0.85rem; text-decoration: none;
-  border: 1px solid var(--line); border-radius: 999px; padding: 9px 16px;
+  border: 1px solid var(--line); border-radius: 12px; padding: 9px 16px;
   background: var(--surface); background-image: var(--card-sheen);
 }
+
+/* Overlapping chain-asset chips on the deposit card. */
+.asset-cluster { display: inline-flex; align-items: center; }
+.asset-cluster > * {
+  width: 28px; height: 28px; border-radius: 999px;
+  border: 2px solid var(--surface);
+  background: var(--surface-2);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+.asset-cluster > * + * { margin-left: -9px; }
+
+/* Manage card: sections divided by hairlines, every block on the same grid. */
+.manage-section { border-top: 1px solid var(--line); padding-top: 18px; }
+.manage-section .section-label { font-weight: 600; font-size: 0.9rem; }
+.manage-section .section-sub { color: var(--muted); font-size: 0.8rem; margin: 2px 0 0; }
 @media (prefers-reduced-motion: reduce) { button:hover { transform: none; } }
 
 .address {

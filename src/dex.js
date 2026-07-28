@@ -113,14 +113,18 @@ export class Dex {
 
   // USD sizing runs through the ETH/USDG pool: how many dollars one ETH buys
   // right now IS the exchange rate the user's buy will actually clear at.
+  // Cached briefly because every buy asks and the public RPC is rate limited.
   async ethUsdPrice() {
+    if (this.priceCache && Date.now() - this.priceCache.at < 30_000) return this.priceCache.value;
     const attempts = FEE_TIERS.map(([fee, tick]) =>
       this.quoteSingle(NATIVE, this.addresses.usdg, fee, tick, 10n ** 18n).catch(() => null)
     );
     const routes = (await Promise.all(attempts)).filter(Boolean).filter((route) => route.amountOut > 0n);
     if (routes.length === 0) throw new Error("No ETH/USDG pool found to price USD orders");
     const best = routes.reduce((a, b) => (b.amountOut > a.amountOut ? b : a));
-    return Number(best.amountOut) / 10 ** (await this.usdgDecimals());
+    const value = Number(best.amountOut) / 10 ** (await this.usdgDecimals());
+    this.priceCache = { value, at: Date.now() };
+    return value;
   }
 
   async usdgDecimals() {
@@ -191,8 +195,10 @@ export class Dex {
 
   // Quotes, applies slippage, sends, and waits for inclusion. `signer` holds
   // the owner's own key; ETH input is sent as value, ERC-20 input via Permit2.
-  async swap(signer, tokenIn, tokenOut, amountInWei) {
-    const route = await this.findBestRoute(tokenIn, tokenOut, amountInWei);
+  // A caller that already discovered a sized route passes it to avoid a
+  // second full quote sweep against the rate-limited RPC.
+  async swap(signer, tokenIn, tokenOut, amountInWei, { route: presetRoute = null } = {}) {
+    const route = presetRoute ?? await this.findBestRoute(tokenIn, tokenOut, amountInWei);
     if (!route) throw new Error("no liquidity route found for this pair");
     if (!sameAddress(tokenIn, NATIVE)) await this.ensureAllowances(signer, tokenIn, amountInWei);
     const minAmountOut = this.minOut(route.amountOut);

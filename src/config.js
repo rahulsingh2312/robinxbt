@@ -50,9 +50,11 @@ function loadOnchain() {
   const maxOrderUsd = Number(process.env.ONCHAIN_MAX_ORDER_USD ?? 100);
   const slippageBps = Number(process.env.ONCHAIN_SLIPPAGE_BPS ?? 100);
   const gasReserveEth = Number(process.env.ONCHAIN_GAS_RESERVE_ETH ?? 0.0002);
+  const maxPriceImpactBps = Number(process.env.ONCHAIN_MAX_PRICE_IMPACT_BPS ?? 300);
   if (!Number.isFinite(maxOrderUsd) || maxOrderUsd <= 0) throw new Error("ONCHAIN_MAX_ORDER_USD must be a positive number");
   if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > 3000) throw new Error("ONCHAIN_SLIPPAGE_BPS must be an integer between 1 and 3000");
   if (!Number.isFinite(gasReserveEth) || gasReserveEth < 0) throw new Error("ONCHAIN_GAS_RESERVE_ETH must be >= 0");
+  if (!Number.isInteger(maxPriceImpactBps) || maxPriceImpactBps < 10 || maxPriceImpactBps > 10000) throw new Error("ONCHAIN_MAX_PRICE_IMPACT_BPS must be an integer between 10 and 10000");
   return {
     enabled,
     walletEncKey,
@@ -61,6 +63,7 @@ function loadOnchain() {
     maxOrderUsd,
     slippageBps,
     gasReserveEth,
+    maxPriceImpactBps,
     // X hard-blocks crypto addresses in posts for 7 days after the app
     // authenticates. Leave false until the account is old enough, then opt in
     // to putting the deposit address directly in funding replies.

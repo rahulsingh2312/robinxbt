@@ -55,16 +55,38 @@ export class OnchainBroker {
     this.resolver = resolver;
     this.config = config;
     this.logger = logger;
+    // One buy at a time per wallet: two mentions racing through the same
+    // signer would collide on the account nonce and double-count balances.
+    this.walletLocks = new Map();
+  }
+
+  async withWalletLock(authorId, work) {
+    const key = String(authorId);
+    const previous = this.walletLocks.get(key) ?? Promise.resolve();
+    const current = previous.then(work, work);
+    // The stored promise never rejects, so a failed buy can't poison the queue.
+    const settled = current.catch(() => {});
+    this.walletLocks.set(key, settled);
+    settled.then(() => {
+      if (this.walletLocks.get(key) === settled) this.walletLocks.delete(key);
+    });
+    return current;
   }
 
   async ensureWallet(botUsername, authorId, username) {
     return this.vault.ensureWallet(this.store, botUsername, authorId, username);
   }
 
-  // The single reply-producing entry point. `parentText` is the post the user
-  // replied to (usually the bot's own advice) — that is where "buy" without a
-  // ticker gets its asset from, exactly as the advice flow promises.
-  async handleBuy({ botUsername, authorId, username, intent, parentText, pendingBuy, dryRun }) {
+  // The single reply-producing entry point, serialized per wallet so racing
+  // mentions can't collide on nonces or double-spend a balance check.
+  async handleBuy(request) {
+    return this.withWalletLock(request.authorId, () => this.executeBuy(request));
+  }
+
+  // `parentText` is the post the user replied to (usually the bot's own
+  // advice) — that is where "buy" without a ticker gets its asset from,
+  // exactly as the advice flow promises.
+  async executeBuy({ botUsername, authorId, username, intent, parentText, pendingBuy, dryRun }) {
     const wallet = await this.ensureWallet(botUsername, authorId, username);
 
     const term = intent.term ?? pendingBuy?.term ?? extractAssetTerms(parentText ?? "")[0] ?? null;
@@ -147,13 +169,30 @@ export class OnchainBroker {
       };
     }
 
+    // Quote the actual size once, then guard and execute on that same route.
+    const route = await this.dex.findBestRoute(spend.tokenIn, asset.address, spend.amountIn);
+    if (!route) {
+      return { reply: `${asset.symbol} has no tradable market at that size right now, so I can’t buy it.` };
+    }
+    const meta = await this.chain.getTokenMeta(asset.address);
+
+    // Thin-pool guard: if the fill would come in far below the indexed price,
+    // the pool is being drained or was never deep enough. Refusing beats
+    // filling someone's $50 into a 20% haircut.
+    if (asset.priceUsd) {
+      const outValueUsd = (Number(route.amountOut) / 10 ** meta.decimals) * asset.priceUsd;
+      const impact = 1 - outValueUsd / amountUsd;
+      if (impact > this.config.maxPriceImpactBps / 10000) {
+        return { reply: `Liquidity for ${asset.symbol} is too thin: a $${amountUsd} buy would lose ${(impact * 100).toFixed(1)}% to price impact. Not doing that to you.` };
+      }
+    }
+
     if (dryRun) {
       return { reply: `[dry run] would swap ${spend.label} (≈$${amountUsd}) for ${asset.symbol} from ${wallet.address}.` };
     }
 
     const signer = this.vault.signerFor(wallet, this.chain.provider);
-    const result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn);
-    const meta = await this.chain.getTokenMeta(asset.address);
+    const result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn, { route });
     const filled = Number(result.quotedOut) / 10 ** meta.decimals;
     this.logger.info(`Onchain buy: $${amountUsd} of ${asset.symbol} for author ${authorId}, tx ${result.hash}`);
     return {

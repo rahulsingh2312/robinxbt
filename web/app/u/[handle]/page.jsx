@@ -191,7 +191,11 @@ function DepositCard({ address, explorer }) {
     <section className="card stack" style={{ gap: 14 }}>
       <div className="spread">
         <h2>Deposit</h2>
-        <span className="pill">ETH OR USDG · ROBINHOOD CHAIN ONLY</span>
+        <span className="asset-cluster" title="Deposit ETH or USDG, on Robinhood Chain only">
+          <svg viewBox="0 0 28 28" aria-label="ETH"><rect width="28" height="28" rx="14" fill="#232323" /><path d="M14 5l5.2 8.6L14 16.8 8.8 13.6 14 5zm0 13l5.2-3.1L14 23l-5.2-8.1L14 18z" fill="#e8e8e4" /></svg>
+          <img src="/usdg.png" alt="USDG" />
+          <img src="/robinhood.png" alt="Robinhood Chain" />
+        </span>
       </div>
       <div className="row" style={{ alignItems: "flex-start", gap: 18 }}>
         <div className="qr-box"><canvas ref={canvasRef} /></div>
@@ -213,6 +217,9 @@ function DepositCard({ address, explorer }) {
           </div>
           <p className="warn-text" style={{ margin: 0 }}>
             Send only on Robinhood Chain (chain id 4663). Funds sent on other networks are gone.
+          </p>
+          <p style={{ margin: 0, fontSize: "0.88rem" }}>
+            Funded? <a href="https://x.com/intent/post?text=%40TryPeterpan%20just%20funded%20my%20wallet%2C%20what%20should%20I%20buy%3F" target="_blank" rel="noreferrer">Tell the bot to buy ↗</a>
           </p>
         </div>
       </div>
@@ -253,7 +260,7 @@ function ManagePanel({ portfolio, onChange }) {
 
       {sellable.length > 0 && (
         <form
-          className="row"
+          className="row manage-section"
           onSubmit={(event) => {
             event.preventDefault();
             if (sell.token && Number(sell.amount) > 0) post("/api/onchain/sell", sell);
@@ -293,7 +300,7 @@ function ManagePanel({ portfolio, onChange }) {
       )}
 
       <form
-        className="row"
+        className="row manage-section"
         onSubmit={(event) => {
           event.preventDefault();
           post("/api/onchain/withdraw", withdrawForm);
@@ -327,11 +334,15 @@ function ManagePanel({ portfolio, onChange }) {
         <button disabled={busy} type="submit">Withdraw</button>
       </form>
 
-      <div className="stack" style={{ gap: 10 }}>
+      <div className="stack manage-section" style={{ gap: 10 }}>
         {!confirmingExport && !revealed && (
-          <div className="row">
+          <div className="spread">
+            <div>
+              <p className="section-label" style={{ margin: 0 }}>Private key</p>
+              <p className="section-sub">Take full custody. Import it into any wallet you control.</p>
+            </div>
             <button className="danger" type="button" onClick={() => setConfirmingExport(true)}>
-              Export private key
+              Export
             </button>
           </div>
         )}

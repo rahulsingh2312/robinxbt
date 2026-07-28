@@ -8,12 +8,12 @@ import { OnchainBroker } from "../src/onchain-broker.js";
 import { WalletVault } from "../src/wallet-vault.js";
 import { Store } from "../src/store.js";
 
-const CONFIG = { maxOrderUsd: 100, gasReserveEth: 0.0002, blockscoutBaseUrl: "https://example.invalid" };
+const CONFIG = { maxOrderUsd: 100, gasReserveEth: 0.0002, maxPriceImpactBps: 300, blockscoutBaseUrl: "https://example.invalid" };
 const NVDA = { address: "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC", symbol: "NVDA", name: "NVIDIA • Robinhood Token", official: true, priceUsd: 197 };
 
 const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
 
-async function makeBroker({ balanceEth = 0, balanceUsdg = 0, resolveTo = NVDA, hasRoute = true, config = CONFIG } = {}) {
+async function makeBroker({ balanceEth = 0, balanceUsdg = 0, resolveTo = NVDA, hasRoute = true, routeOut = 252_500_000_000_000_000n, swapDelayMs = 0, config = CONFIG } = {}) {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), "broker-test-")), "store.json"));
   await store.load();
   const swaps = [];
@@ -30,10 +30,11 @@ async function makeBroker({ balanceEth = 0, balanceUsdg = 0, resolveTo = NVDA, h
       addresses: { usdg: USDG },
       usdgDecimals: async () => 6,
       ethUsdPrice: async () => 2000,
-      findBestRoute: async () => (hasRoute ? { kind: "single" } : null),
-      swap: async (signer, tokenIn, tokenOut, amountIn) => {
-        swaps.push({ tokenIn, token: tokenOut, amountIn });
-        return { hash: "0xabc", quotedOut: 10n ** 17n, minAmountOut: 1n, route: "single" };
+      findBestRoute: async () => (hasRoute ? { kind: "single", amountOut: routeOut } : null),
+      swap: async (signer, tokenIn, tokenOut, amountIn, opts) => {
+        swaps.push({ tokenIn, token: tokenOut, amountIn, route: opts?.route });
+        if (swapDelayMs) await new Promise((resolve) => setTimeout(resolve, swapDelayMs));
+        return { hash: "0xabc", quotedOut: routeOut, minAmountOut: 1n, route: "single" };
       }
     },
     resolver: { resolve: async () => resolveTo },
@@ -176,6 +177,36 @@ test("a token with no live market is refused before any funding ask", async () =
   // Crucially: no deposit address — nobody should fund a wallet for an unbuyable token.
   assert.ok(!result.reply.includes("0x"));
   assert.equal(swaps.length, 0);
+});
+
+test("a thin pool is refused by the price-impact guard before any swap", async () => {
+  // 0.2 NVDA out for $50 at an indexed $197 is a ~21% haircut.
+  const { broker, swaps } = await makeBroker({ balanceEth: 1, routeOut: 200_000_000_000_000_000n });
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 50, term: "NVDA" }, parentText: "", dryRun: false
+  });
+  assert.match(result.reply, /price impact/);
+  assert.equal(swaps.length, 0);
+});
+
+test("buys for the same wallet run one at a time", async () => {
+  const { broker, swaps } = await makeBroker({ balanceEth: 1, swapDelayMs: 30 });
+  const order = [];
+  const original = broker.executeBuy.bind(broker);
+  broker.executeBuy = async (request) => {
+    order.push(`start-${request.intent.amountUsd}`);
+    const result = await original(request);
+    order.push(`end-${request.intent.amountUsd}`);
+    return result;
+  };
+  const buy = (amountUsd) => broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd, term: "NVDA" }, parentText: "", dryRun: false
+  });
+  await Promise.all([buy(10), buy(20)]);
+  assert.deepEqual(order, ["start-10", "end-10", "start-20", "end-20"]);
+  assert.equal(swaps.length, 2);
 });
 
 test("a pending ask plus a bare amount completes the original buy", async () => {

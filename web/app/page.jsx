@@ -43,6 +43,11 @@ export default function Home() {
           Chain. Fund it with ETH or USDG, say “buy”, and tokenized stocks or
           memecoins land in a wallet only you can claim.
         </p>
+        <div className="row" style={{ justifyContent: "center", marginTop: 6 }}>
+          <a className="btn" href="https://x.com/intent/post?text=%40TryPeterpan%20what%27s%20the%20hottest%20thing%20on%20Robinhood%20Chain%20right%20now%3F%20should%20I%20buy%3F" target="_blank" rel="noreferrer">
+            Ask the bot what’s hot ↗
+          </a>
+        </div>
       </header>
 
       <div className="divider"><span>One real conversation</span></div>

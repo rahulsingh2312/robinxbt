@@ -245,7 +245,7 @@ export class MentionWorker {
       return fitForPost(result.reply);
     } catch (error) {
       this.logger.error(`Onchain buy failed for post ${post.id}`, error);
-      return `Couldn’t place that buy: ${String(error.message).slice(0, 100)}`;
+      return `Couldn’t place that buy: ${friendlyChainError(error)}`;
     }
   }
 
@@ -400,6 +400,16 @@ export class MentionWorker {
       return undefined;
     }
   }
+}
+
+// Raw revert data is useless in a tweet; the recognizable failures get plain
+// words and the rest is truncated.
+function friendlyChainError(error) {
+  const message = String(error.shortMessage ?? error.message ?? error);
+  if (/TooLittleReceived|V4TooLittle|slippage/i.test(message)) return "the price moved past my slippage guard. Try again.";
+  if (/insufficient funds/i.test(message)) return "gas came up short. Top up a little ETH and retry.";
+  if (/timeout|network|ECONN|429/i.test(message)) return "the chain RPC is being slow. Try again in a minute.";
+  return message.slice(0, 100);
 }
 
 function priceFrom(quote) {

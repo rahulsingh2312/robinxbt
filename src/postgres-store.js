@@ -197,7 +197,10 @@ export class PostgresStore {
       [botUsername.toLowerCase(), xUsername.toLowerCase()]
     );
     const row = result.rows[0];
-    return row ? { ...row.data, authorId: row.author_id } : null;
+    if (!row) return null;
+    // Only the wallet that currently claims this handle may answer for it.
+    if (row.data?.xUsername && row.data.xUsername !== xUsername.toLowerCase()) return null;
+    return { ...row.data, authorId: row.author_id };
   }
 
   async savePendingBuy(botUsername, postId, buy) {

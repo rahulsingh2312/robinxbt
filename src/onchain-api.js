@@ -1,13 +1,14 @@
 import { createHmac, randomBytes, createHash, timingSafeEqual } from "node:crypto";
 import { formatEther, parseUnits } from "ethers";
 import { NATIVE } from "./dex.js";
-import { RateLimiter, clientIp, originAllowed } from "./http-guard.js";
+import { RateLimiter, clientIp, originAllowed, proxyAuthenticated } from "./http-guard.js";
 
 // A stolen session cookie is the realistic threat here, so the endpoints that
 // move money are each rate limited, and the one that hands over the private
 // key additionally demands a login fresh enough that the attacker would have
 // had to steal the X account itself.
 const EXPORT_MAX_SESSION_AGE_MS = 30 * 60 * 1000;
+const MOVE_MAX_SESSION_AGE_MS = 12 * 60 * 60 * 1000;
 
 // HTTP surface for the portfolio site. The site never holds keys or sessions
 // itself — it proxies /api/onchain and /auth here, so the browser's cookies
@@ -38,7 +39,10 @@ export class OnchainApi {
     this.secureCookies = config.onchain.siteBaseUrl.startsWith("https:");
     // Requests may legitimately arrive at the site origin or, in local
     // development, directly at this server.
-    this.allowedOrigins = [config.onchain.siteBaseUrl, config.publicBaseUrl].filter(Boolean);
+    // A plaintext localhost origin has no business being trusted once the
+    // site is on https, so it is only allowed alongside an http site URL.
+    this.allowedOrigins = [config.onchain.siteBaseUrl, this.secureCookies ? null : config.publicBaseUrl].filter(Boolean);
+    this.proxySecret = config.onchain.proxySecret;
     this.limits = {
       login: new RateLimiter({ windowMs: 10 * 60_000, max: 20 }),
       portfolio: new RateLimiter({ windowMs: 60_000, max: 60 }),
@@ -70,8 +74,16 @@ export class OnchainApi {
   // Returns true when the request was handled here.
   async route(request, response, url) {
     const { pathname } = url;
+    // With a proxy secret configured, the wallet API exists only behind the
+    // site. Direct hits on the public port get nothing: no enumeration, no
+    // sign-in, no spoofed client IPs.
+    request.proxyAuthenticated = proxyAuthenticated(request, this.proxySecret);
+    if (this.proxySecret && !request.proxyAuthenticated) {
+      sendJson(response, 403, { error: "Not found" });
+      return true;
+    }
     if (request.method === "GET" && pathname.startsWith("/api/onchain/portfolio/")) {
-      if (this.limits.portfolio.check(clientIp(request)) !== null) {
+      if (this.limits.portfolio.check(clientIp(request, { trustForwarded: request.proxyAuthenticated })) !== null) {
         return sendJson(response, 429, { error: "Slow down." }), true;
       }
       await this.portfolio(response, decodeURIComponent(pathname.split("/").filter(Boolean)[3] ?? ""));
@@ -79,7 +91,7 @@ export class OnchainApi {
     }
     if (request.method === "GET" && pathname === "/api/onchain/me") { await this.me(request, response); return true; }
     if (request.method === "GET" && pathname === "/auth/x/login") {
-      if (this.limits.login.check(clientIp(request)) !== null) {
+      if (this.limits.login.check(clientIp(request, { trustForwarded: request.proxyAuthenticated })) !== null) {
         return sendJson(response, 429, { error: "Too many sign-in attempts. Try again shortly." }), true;
       }
       await this.login(response, url);
@@ -141,7 +153,11 @@ export class OnchainApi {
     ]);
     const ethAmount = Number(formatEther(eth));
     sendJson(response, 200, {
-      username,
+      // The record's own handle and id, never the requested string: a
+      // recycled handle must not be able to present someone else's wallet
+      // as its own.
+      username: wallet.xUsername || username,
+      authorId: wallet.authorId ?? null,
       address: wallet.address,
       chainId: 4663,
       explorer: `${this.config.onchain.blockscoutBaseUrl}/address/${wallet.address}`,
@@ -235,6 +251,11 @@ export class OnchainApi {
     const session = await this.authenticate(request, response);
     if (!session) return;
     if (!this.guard(request, response, { limiter: this.limits.move, key: `w:${session.authorId}` })) return;
+    // A single withdraw can empty the wallet, so it needs the same recent
+    // sign-in that key export does. A stolen cookie alone is not enough.
+    if (!session.iat || Date.now() - session.iat > MOVE_MAX_SESSION_AGE_MS) {
+      return sendJson(response, 401, { error: "For withdrawals, sign in with X again first.", reauth: true });
+    }
     const wallet = await this.store.getWalletByAuthor(this.defaultBot, session.authorId);
     if (!wallet) return sendJson(response, 404, { error: "No wallet for this account" });
     const body = await readJson(request);
@@ -251,10 +272,14 @@ export class OnchainApi {
     if (asset !== "eth" && !/^0x[0-9a-fA-F]{40}$/.test(asset)) return sendJson(response, 400, { error: "`asset` must be \"eth\" or a token address" });
     if (asset !== "eth" && to.toLowerCase() === asset.toLowerCase()) return sendJson(response, 400, { error: "Sending a token to its own contract would lose it." });
     try {
-      const signer = this.vault.signerFor(wallet, this.chain.provider);
-      const receipt = asset === "eth"
-        ? await this.chain.sendEth(signer, to, amount)
-        : await this.chain.sendToken(signer, asset, to, amount);
+      // Same serialization as buys: two transactions signed at once by the
+      // same wallet would reuse a nonce and one would be dropped.
+      const receipt = await this.onchain.withWalletLock(session.authorId, async () => {
+        const signer = this.vault.signerFor(wallet, this.chain.provider);
+        return asset === "eth"
+          ? await this.chain.sendEth(signer, to, amount)
+          : await this.chain.sendToken(signer, asset, to, amount);
+      });
       this.logger.info(`Withdraw by @${session.username}: ${amount} ${asset} -> ${to}, tx ${receipt.hash}`);
       sendJson(response, 200, { hash: receipt.hash });
     } catch (error) {
@@ -278,8 +303,10 @@ export class OnchainApi {
     try {
       const meta = await this.chain.getTokenMeta(token);
       const amountIn = parseUnits(String(body.amount), meta.decimals);
-      const signer = this.vault.signerFor(wallet, this.chain.provider);
-      const result = await this.onchain.dex.swap(signer, token, NATIVE, amountIn);
+      const result = await this.onchain.withWalletLock(session.authorId, async () => {
+        const signer = this.vault.signerFor(wallet, this.chain.provider);
+        return this.onchain.dex.swap(signer, token, NATIVE, amountIn);
+      });
       this.logger.info(`Sell by @${session.username}: ${amount} ${meta.symbol} -> ETH, tx ${result.hash}`);
       sendJson(response, 200, { hash: result.hash, receivedEthAtLeast: formatEther(result.minAmountOut) });
     } catch (error) {

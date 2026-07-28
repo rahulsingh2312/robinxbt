@@ -144,6 +144,12 @@ export class Store {
   async setWallet(botUsername, authorId, record) {
     this.data.wallets ??= {};
     this.data.walletIndex ??= {};
+    const previous = this.data.wallets[this.userKey(botUsername, authorId)];
+    // A handle this wallet no longer uses must stop resolving to it, or
+    // whoever registers that handle next inherits the lookup.
+    if (previous?.xUsername && previous.xUsername !== record.xUsername) {
+      delete this.data.walletIndex[this.userKey(botUsername, previous.xUsername)];
+    }
     this.data.wallets[this.userKey(botUsername, authorId)] = record;
     if (record.xUsername) this.data.walletIndex[this.userKey(botUsername, record.xUsername)] = String(authorId);
     await this.save();
@@ -160,7 +166,10 @@ export class Store {
     const authorId = this.data.walletIndex?.[this.userKey(botUsername, xUsername)];
     if (!authorId) return null;
     const record = await this.getWalletByAuthor(botUsername, authorId);
-    return record ? { ...record, authorId } : null;
+    // The index can lag a rename; the record itself is the authority.
+    if (!record) return null;
+    if (record.xUsername && record.xUsername !== xUsername.toLowerCase()) return null;
+    return { ...record, authorId };
   }
 
   // A buy the bot proposed but that still needs an amount, keyed by the ID of

@@ -106,7 +106,10 @@ function LoadingStatement({ handle }) {
 }
 
 function Statement({ portfolio, me, onChange, onSignOut }) {
-  const owns = me?.username === portfolio.username;
+  // Compared by numeric X id: handles change hands, ids do not.
+  const owns = portfolio.authorId
+    ? me?.authorId === portfolio.authorId
+    : Boolean(me) && me.username === portfolio.username;
   return (
     <div className="stack" style={{ gap: 28 }}>
       <div className="spread">
@@ -122,8 +125,10 @@ function Statement({ portfolio, me, onChange, onSignOut }) {
             <button className="quiet" type="button" onClick={onSignOut}>Sign out</button>
           </div>
         ) : (
-          <a className="btn-quiet" href={`/auth/x/login?return=/u/${encodeURIComponent(portfolio.username)}`}>
-            Your wallet? Sign in with 𝕏
+          <a className="btn-glass" href={`/auth/x/login?return=/u/${encodeURIComponent(portfolio.username)}`}>
+            <span className="long">Your wallet? Sign in with</span>
+            <span className="short">Sign in with</span>
+            <span className="x-mark">𝕏</span>
           </a>
         )}
       </div>
@@ -213,8 +218,8 @@ function DepositCard({ address, explorer }) {
             >
               {copied ? "Copied ✓" : "Copy address"}
             </button>
-            <a href={explorer} target="_blank" rel="noreferrer">Explorer ↗</a>
-            <span className="warn-text" style={{ fontSize: "0.72rem", whiteSpace: "nowrap" }}>
+            <a className="link-action" href={explorer} target="_blank" rel="noreferrer">Explorer ↗</a>
+            <span className="warn-text" style={{ fontSize: "0.76rem", whiteSpace: "nowrap" }}>
               Robinhood Chain (4663) only
             </span>
           </div>
@@ -244,6 +249,12 @@ function ManagePanel({ portfolio, onChange }) {
         body: JSON.stringify(body)
       });
       const payload = await response.json();
+      // The server asks for a fresh sign-in before moving funds; take them
+      // straight there instead of showing an error.
+      if (payload.reauth) {
+        window.location.href = `/auth/x/login?return=/u/${encodeURIComponent(portfolio.username)}`;
+        return false;
+      }
       setMessage(response.ok ? `Done. Tx ${payload.hash}` : payload.error);
       if (response.ok) onChange();
       return response.ok;

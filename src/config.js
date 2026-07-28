@@ -99,7 +99,11 @@ function loadOnchain() {
       clientId: process.env.X_CLIENT_ID ?? "",
       clientSecret: process.env.X_CLIENT_SECRET ?? ""
     },
-    sessionSecret
+    sessionSecret,
+    // Shared with the site's proxy. When set, the wallet API refuses any
+    // request that did not come through the site, which also makes the
+    // forwarded client IP trustworthy for rate limiting.
+    proxySecret: process.env.PROXY_SHARED_SECRET ?? ""
   };
 }
 

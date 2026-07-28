@@ -19,36 +19,26 @@ test("the admin-verified Robinhood token beats same-symbol impersonations", asyn
   assert.equal(asset.priceUsd, 197.63);
 });
 
-test("an admin-verified ticker-squatter is not treated as official", async () => {
-  // Real case: "DoOnlyGoodEveryday" trades as DOGE, explorer-verified, but is
-  // not a Robinhood-issued token. It may resolve as a plain memecoin — never
-  // with the official flag.
+test("an admin-verified ticker-squatter is never treated as official", async () => {
+  // Real case: "DoOnlyGoodEveryday" trades as DOGE and is explorer-verified,
+  // but it is not issuer-verified, so the ticker must not resolve to it.
   const squatter = { ...FAKE, name: "DoOnlyGoodEveryday", is_verified_via_admin_panel: true, exchange_rate: "0.0000153", circulating_market_cap: "15333" };
   const asset = await resolverReturning([squatter]).resolve("NVDA");
-  assert.equal(asset.official, false);
-  assert.equal(asset.address, squatter.address_hash);
+  assert.equal(asset.unverified, true);
 });
 
-test("an unverified, unpriced ticker resolves to nothing", async () => {
-  const resolver = resolverReturning([FAKE]);
-  assert.equal(await resolver.resolve("NVDA"), null);
+test("an unverified ticker never resolves to an address, however rich it looks", async () => {
+  // Market cap is supply times price, and an attacker controls both, so a
+  // ticker query can only ever answer with an issuer-verified token.
+  const rich = { ...FAKE, symbol: "WOJ", address_hash: "0x3333333333333333333333333333333333333333", exchange_rate: "0.001", circulating_market_cap: "999000000000" };
+  const result = await resolverReturning([rich]).resolve("WOJ");
+  assert.equal(result.unverified, true);
+  assert.equal(result.address, undefined);
 });
 
-test("one traded memecoin resolves; several comparable ones fail closed", async () => {
-  const memeA = { ...FAKE, symbol: "WOJ", address_hash: "0x3333333333333333333333333333333333333333", exchange_rate: "0.001", circulating_market_cap: "900000" };
-  const memeB = { ...FAKE, symbol: "WOJ", address_hash: "0x4444444444444444444444444444444444444444", exchange_rate: "0.002", circulating_market_cap: "800000" };
-  const single = await resolverReturning([memeA]).resolve("WOJ");
-  assert.equal(single.address, memeA.address_hash);
-  assert.equal(single.official, false);
-  const contested = await resolverReturning([memeA, memeB]).resolve("WOJ");
-  assert.equal(contested.ambiguous, true);
-});
-
-test("a dominant memecoin (10x market cap) wins over dust copies", async () => {
-  const big = { ...FAKE, symbol: "WOJ", address_hash: "0x3333333333333333333333333333333333333333", exchange_rate: "0.001", circulating_market_cap: "5000000" };
-  const dust = { ...FAKE, symbol: "WOJ", address_hash: "0x4444444444444444444444444444444444444444", exchange_rate: "0.002", circulating_market_cap: "400000" };
-  const winner = await resolverReturning([dust, big]).resolve("WOJ");
-  assert.equal(winner.address, big.address_hash);
+test("a name match never satisfies a ticker query", async () => {
+  const impostor = { ...FAKE, symbol: "XYZ", name: "NVDA Robinhood", is_verified_via_admin_panel: true, exchange_rate: "1" };
+  assert.equal(await resolverReturning([impostor]).resolve("NVDA"), null);
 });
 
 test("contract addresses resolve directly via the token endpoint", async () => {

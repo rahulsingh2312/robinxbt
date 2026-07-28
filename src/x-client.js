@@ -19,7 +19,7 @@ export class XClient {
     // carries no claim to judge.
     url.searchParams.set("expansions", "author_id,referenced_tweets.id");
     url.searchParams.set("user.fields", "username,name");
-    url.searchParams.set("tweet.fields", "referenced_tweets,conversation_id,text");
+    url.searchParams.set("tweet.fields", "referenced_tweets,conversation_id,text,author_id");
     if (sinceId) url.searchParams.set("since_id", sinceId);
     const response = await fetch(url, { headers: this.headers("GET", url) });
     return this.read(response);

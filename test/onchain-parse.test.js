@@ -12,8 +12,32 @@ test("parses cashtags, k-suffix amounts, and contract addresses", () => {
   assert.equal(parseBuyIntent("buy $1.5k of $pepe", "mybot").amountUsd, 1500);
   assert.equal(parseBuyIntent("buy $1.5k of $pepe", "mybot").term, "PEPE");
   const ca = "0x" + "d0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC";
-  assert.equal(parseBuyIntent(`ape 20 bucks into ${ca}`, "mybot").term, ca);
-  assert.equal(parseBuyIntent(`ape 20 bucks into ${ca}`, "mybot").amountUsd, 20);
+  assert.equal(parseBuyIntent(`ape into ${ca} for 20 bucks`, "mybot").term, ca);
+  assert.equal(parseBuyIntent(`ape into ${ca} for 20 bucks`, "mybot").amountUsd, 20);
+});
+
+test("an address's digits are never read as a dollar amount", () => {
+  // The digit runs inside a contract address used to parse as ~1e39 dollars.
+  const intent = parseBuyIntent("buy 0x1111111111111111111111111111111111111111", "mybot");
+  assert.equal(intent.amountUsd, null);
+});
+
+test("casual phrases that merely mention money never order a buy", () => {
+  // These may still read as a bare amount, which only ever completes a buy
+  // the bot itself asked the same author to size. None of them is an order.
+  for (const text of [
+    "@mybot grab a coffee, that will be $5",
+    "@mybot get me out of here for $10",
+    "@mybot lol send it $25",
+    "@mybot yolo $100"
+  ]) {
+    assert.equal(parseBuyIntent(text, "mybot").wantsBuy, false, text);
+  }
+});
+
+test("questions never execute, even carrying an amount", () => {
+  assert.equal(parseBuyIntent("@mybot would you buy $50 of NVDA here?", "mybot"), null);
+  assert.equal(parseBuyIntent("@mybot should I buy NVDA?", "mybot"), null);
 });
 
 test("buy without amount or asset still reads as intent", () => {

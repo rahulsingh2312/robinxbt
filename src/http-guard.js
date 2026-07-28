@@ -2,24 +2,33 @@
 // assumes the session cookie will eventually leak (device theft, an on-path
 // proxy, a borrowed laptop) and tries to make that leak survivable.
 
+import { timingSafeEqual } from "node:crypto";
+
 // Browsers never send a cross-site POST with SameSite=Lax cookies, so CSRF is
 // already blocked at the cookie layer. This is the belt to that suspenders:
 // a state-changing request must come from our own origin, or from no origin
 // at all (curl with an explicit session, which needs the cookie anyway).
 export function originAllowed(request, allowedOrigins) {
   const origin = request.headers.origin;
-  if (!origin) return true;
-  return allowedOrigins.some((allowed) => origin.toLowerCase() === allowed.toLowerCase());
+  if (origin) return allowedOrigins.some((allowed) => origin.toLowerCase() === allowed.toLowerCase());
+  // No Origin at all: accept only when the browser states the request is
+  // same-origin, or when it is a non-browser client that authenticated as our
+  // proxy. Anything else fails closed.
+  const site = request.headers["sec-fetch-site"];
+  if (site) return site === "same-origin";
+  return request.proxyAuthenticated === true;
 }
 
 // Fixed-window counter, keyed however the caller wants (session, IP, handle).
 // In memory on purpose: a restart only ever loosens limits, and the numbers
 // are small enough that a Redis dependency would cost more than it buys.
 export class RateLimiter {
-  constructor({ windowMs, max }) {
+  constructor({ windowMs, max, maxKeys = 20_000 }) {
     this.windowMs = windowMs;
     this.max = max;
+    this.maxKeys = maxKeys;
     this.hits = new Map();
+    this.lastSweep = 0;
   }
 
   // Returns null when allowed, or seconds to wait when limited.
@@ -36,24 +45,48 @@ export class RateLimiter {
     return null;
   }
 
+  // Sweeping on every insert made each request O(n): a flood of distinct keys
+  // drove per-request cost quadratic and blocked the event loop that signs
+  // withdrawals. Sweep at most once per window, and cap the map outright.
   sweep(now) {
-    if (this.hits.size < 5000) return;
+    if (now - this.lastSweep < this.windowMs && this.hits.size < this.maxKeys) return;
+    this.lastSweep = now;
     for (const [key, entry] of this.hits) {
       if (now - entry.start >= this.windowMs) this.hits.delete(key);
+    }
+    // Still oversized after expiry means an active flood: drop the oldest
+    // half rather than let memory grow without bound.
+    if (this.hits.size >= this.maxKeys) {
+      const drop = Math.ceil(this.hits.size / 2);
+      let dropped = 0;
+      for (const key of this.hits.keys()) {
+        this.hits.delete(key);
+        if (++dropped >= drop) break;
+      }
     }
   }
 }
 
-// The client IP as seen through the Vercel proxy. Only the LAST hop of
-// x-forwarded-for is trustworthy in general, but since the only path to this
-// server is our own proxy, the first entry is the real client. Falls back to
-// the socket address when the header is absent (direct hit).
-export function clientIp(request) {
-  const forwarded = request.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.length > 0) {
-    return forwarded.split(",")[0].trim();
+// X-Forwarded-For is caller-controlled unless the caller is our own proxy, and
+// this server answers on a public port. Trusting it blindly let anyone rotate
+// a fake IP per request and bypass every rate limit, so the header counts only
+// on requests the proxy authenticated; everyone else is keyed by socket.
+export function clientIp(request, { trustForwarded = false } = {}) {
+  if (trustForwarded) {
+    const forwarded = request.headers["x-forwarded-for"];
+    if (typeof forwarded === "string" && forwarded.length > 0) return forwarded.split(",")[0].trim();
   }
   return request.socket?.remoteAddress ?? "unknown";
+}
+
+// Requests that reach this server directly (not through the site) are refused
+// when a proxy secret is configured, which is what makes the forwarded-for
+// header trustworthy above.
+export function proxyAuthenticated(request, secret) {
+  if (!secret) return false;
+  const provided = request.headers["x-proxy-secret"];
+  if (typeof provided !== "string" || provided.length !== secret.length) return false;
+  return timingSafeEqual(Buffer.from(provided), Buffer.from(secret));
 }
 
 // Applied to every response: no sniffing, no framing, no referrer leakage,
@@ -88,6 +121,20 @@ export function redactingLogger(base = console) {
   const original = Object.fromEntries(
     ["info", "warn", "error", "debug"].map((level) => [level, (base[level] ?? base.log).bind(base)])
   );
-  const wrap = (level) => (...args) => original[level](...args.map((arg) => (typeof arg === "string" ? redact(arg) : arg)));
+  // Every risky call site logs an Error, not a string, so redaction has to
+  // reach inside Errors and objects too.
+  const clean = (arg) => {
+    if (typeof arg === "string") return redact(arg);
+    if (arg instanceof Error) {
+      const copy = new Error(redact(arg.message));
+      copy.stack = redact(arg.stack ?? "");
+      return copy;
+    }
+    if (arg && typeof arg === "object") {
+      try { return JSON.parse(redact(JSON.stringify(arg))); } catch { return "[unserializable]"; }
+    }
+    return arg;
+  };
+  const wrap = (level) => (...args) => original[level](...args.map(clean));
   return { info: wrap("info"), warn: wrap("warn"), error: wrap("error"), debug: wrap("debug") };
 }

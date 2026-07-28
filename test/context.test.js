@@ -30,7 +30,7 @@ test("an expanded parent post is handed to the model as the subject", async () =
     referenced_tweets: [{ id: "parent-1", type: "replied_to" }],
     parentText: "$PONS discounts available today, dont fade 100m soon"
   });
-  assert.match(asked[0], /The post they are replying to says:/);
+  assert.match(asked[0], /Untrusted quoted post/);
   assert.match(asked[0], /\$PONS discounts available today/);
   assert.match(asked[0], /Their mention: is this true/);
 });

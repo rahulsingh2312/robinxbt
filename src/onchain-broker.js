@@ -14,12 +14,19 @@ export function parseBuyIntent(text, botUsername) {
     .trim();
   if (!command) return null;
 
-  const wantsBuy = /\b(buy|ape|grab|get me|send it|yolo)\b/i.test(command);
-  const amountUsd = parseUsdAmount(command);
+  // A question is a question, never an order: "would you buy $50 of NVDA?"
+  // used to execute because it carried an amount.
+  if (command.includes("?")) return null;
+  // Only unambiguous imperatives move money. "grab a coffee, that will be $5"
+  // and "get me out of here for $10" both used to fill.
+  const wantsBuy = /\b(buy|ape into|aping into)\b/i.test(command);
   const address = command.match(/\b(0x[0-9a-fA-F]{40})\b/)?.[1] ?? null;
+  // Amounts are read from the text with any contract address removed, so the
+  // digits inside an address cannot be parsed as a dollar figure.
+  const amountUsd = parseUsdAmount(command.replace(/\b0x[0-9a-fA-F]{40}\b/g, " "));
   let term = address;
   if (!term) {
-    const afterVerb = command.match(/\b(?:buy|ape|grab)\b(?:\s+\$?[\d,.]+k?\s*(?:usd|dollars|bucks|worth)?\s*(?:of)?)?\s+\$?([A-Za-z][A-Za-z0-9]{0,14})\b/i)?.[1];
+    const afterVerb = command.match(/\b(?:buy|ape into|aping into)\b(?:\s+\$?[\d,.]+k?\s*(?:usd|dollars|bucks|worth)?\s*(?:of)?)?\s+\$?([A-Za-z][A-Za-z0-9]{0,14})\b/i)?.[1];
     if (afterVerb && !/^(me|some|that|this|it|the|a|an|usd|dollars|bucks|worth|of)$/i.test(afterVerb)) term = afterVerb.toUpperCase();
     if (!term) {
       const cashtag = command.match(/\$([A-Za-z][A-Za-z0-9]{0,14})\b/)?.[1];
@@ -96,6 +103,9 @@ export class OnchainBroker {
     const asset = await this.resolver.resolve(term);
     if (asset?.ambiguous) {
       return { reply: `Several tokens trade as ${term} and none is clearly the real one. Reply with the contract address and I’ll use exactly that.` };
+    }
+    if (asset?.unverified) {
+      return { reply: `${asset.symbol} on Robinhood Chain isn’t an issuer-verified token, and tickers are free to fake. Reply with the exact contract address if you still want it.` };
     }
     if (!asset) {
       return { reply: `Couldn’t find ${term} on Robinhood Chain. If it’s a memecoin, reply with its contract address.` };
@@ -176,15 +186,39 @@ export class OnchainBroker {
     }
     const meta = await this.chain.getTokenMeta(asset.address);
 
-    // Thin-pool guard: if the fill would come in far below the indexed price,
-    // the pool is being drained or was never deep enough. Refusing beats
-    // filling someone's $50 into a 20% haircut.
+    // Thin-pool guard, measured two ways because either source can lie.
+    // First against the indexed price when one exists.
     if (asset.priceUsd) {
       const outValueUsd = (Number(route.amountOut) / 10 ** meta.decimals) * asset.priceUsd;
       const impact = 1 - outValueUsd / amountUsd;
       if (impact > this.config.maxPriceImpactBps / 10000) {
         return { reply: `Liquidity for ${asset.symbol} is too thin: a $${amountUsd} buy would lose ${(impact * 100).toFixed(1)}% to price impact. Not doing that to you.` };
       }
+    }
+    // Then against the pool itself: quote selling the output straight back.
+    // A honeypot or a pool seeded to swallow buys fails here even when the
+    // explorer has never priced the token, which is exactly the case where
+    // the check above cannot help.
+    const roundTrip = await this.dex.findBestRoute(asset.address, spend.tokenIn, route.amountOut).catch(() => null);
+    if (!roundTrip || roundTrip.amountOut === 0n) {
+      return { reply: `${asset.symbol} can be bought but not sold back right now, which is how honeypots work. Skipping it.` };
+    }
+    const retained = Number(roundTrip.amountOut) / Number(spend.amountIn);
+    const roundTripLossBps = Math.round((1 - retained) * 10000);
+    // A round trip always costs two pool fees, so the allowance is the impact
+    // budget doubled plus a fee margin.
+    if (roundTripLossBps > this.config.maxPriceImpactBps * 2 + 200) {
+      return { reply: `${asset.symbol} would lose ${(roundTripLossBps / 100).toFixed(1)}% on a buy-then-sell round trip. That pool is too thin or rigged. Not doing it.` };
+    }
+
+    // Re-assert the cap against the real outlay: the ETH path sizes through a
+    // spot quote, and a depressed quote would otherwise send more ETH than the
+    // stated dollars while still passing the earlier check.
+    const spendUsd = spend.tokenIn === NATIVE
+      ? (Number(spend.amountIn) / 1e18) * ethUsd
+      : Number(spend.amountIn) / 10 ** usdgDecimals;
+    if (spendUsd > this.config.maxOrderUsd * 1.05) {
+      return { reply: `Pricing looks off right now (that would spend about $${Math.round(spendUsd)} for a $${amountUsd} order), so I'm not sending it.` };
     }
 
     if (dryRun) {

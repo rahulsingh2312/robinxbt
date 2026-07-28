@@ -19,8 +19,11 @@ export class AssetResolver {
     if (!cleaned) return null;
     if (ADDRESS.test(cleaned)) return this.byAddress(cleaned);
     const key = cleaned.toUpperCase();
-    if (!this.cache.has(key)) this.cache.set(key, await this.search(key));
-    return this.cache.get(key);
+    const cached = this.cache.get(key);
+    if (cached && Date.now() - cached.at < 5 * 60_000) return cached.value;
+    const value = await this.search(key);
+    this.cache.set(key, { value, at: Date.now() });
+    return value;
   }
 
   async byAddress(address) {
@@ -45,8 +48,11 @@ export class AssetResolver {
     const tokens = (body.items ?? []).filter((item) => item.type === "token" && item.token_type === "ERC-20");
     if (tokens.length === 0) return null;
 
-    const symbolMatches = tokens.filter((item) => (item.symbol ?? "").toUpperCase() === term);
-    const pool = symbolMatches.length > 0 ? symbolMatches : tokens;
+    // Only exact symbol matches count. Letting a NAME match answer a ticker
+    // query means "NVDA" can resolve to a token called "NVDA Robinhood" whose
+    // symbol is something else entirely.
+    const pool = tokens.filter((item) => (item.symbol ?? "").toUpperCase() === term);
+    if (pool.length === 0) return null;
 
     // Explorer verification alone is NOT enough: ticker-squatters get admin
     // verified too (a "DOGE" that is not Dogecoin). Official means issued by
@@ -55,19 +61,11 @@ export class AssetResolver {
     const official = pool.find((item) => item.is_verified_via_admin_panel && item.exchange_rate && /• Robinhood Token$/.test(item.name ?? ""));
     if (official) return this.entry(official, true);
 
-    // Memecoins are unverified by nature. Priced-with-market-cap is the bar:
-    // it means an indexed pool with actual liquidity, not a freshly minted
-    // impersonation. More than one plausible candidate means we cannot know
-    // which one the user wants, so nothing is bought.
-    const traded = pool.filter((item) => item.exchange_rate && item.circulating_market_cap);
-    if (traded.length === 1) return this.entry(traded[0], false);
-    if (traded.length > 1) {
-      const [best, second] = [...traded].sort((a, b) => Number(b.circulating_market_cap) - Number(a.circulating_market_cap));
-      // A 10x market-cap gap treats the leader as the obvious answer.
-      if (Number(best.circulating_market_cap) >= 10 * Number(second.circulating_market_cap)) return this.entry(best, false);
-      return { ambiguous: true, count: traded.length };
-    }
-    return null;
+    // Everything else fails closed. Market cap is supply times price, and an
+    // attacker mints the supply and seeds the pool that sets the price, so
+    // ranking unverified tokens by it just hands the ticker to whoever fakes
+    // the biggest number. An unverified token must be named by its address.
+    return pool.length > 0 ? { unverified: true, symbol: term, count: pool.length } : null;
   }
 
   entry(item, official) {

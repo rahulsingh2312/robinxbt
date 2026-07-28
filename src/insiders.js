@@ -105,6 +105,18 @@ function parseBlock(block) {
 // about markets cash-tag every ticker they mention, so all but the first are
 // downgraded to plain text. $12.34 is not a cashtag — only $ followed by
 // letters counts.
+// Injected instructions in a tweet can steer the model's wording, so no
+// outbound reply may carry a link: it would be phishing published from the
+// bot's own account, at 13x the per-post price.
+export function stripUrls(text) {
+  return String(text)
+    .replace(/\bhttps?:\/\/\S+/gi, "")
+    .replace(/\b(?:www\.)[^\s]+/gi, "")
+    .replace(/\b[a-z0-9-]+\.(?:com|net|org|io|xyz|co|app|link|gg|me|fi|finance)(?:\/\S*)?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export function limitCashtags(text, max = 1) {
   let seen = 0;
   return text.replace(/\$([A-Za-z]{1,6})\b/g, (match, symbol) => {

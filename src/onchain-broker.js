@@ -107,10 +107,11 @@ export class OnchainBroker {
 
     if (balance < amountInWei + gasReserve) {
       const shortfall = Number(formatEther(amountInWei + gasReserve - balance));
-      // The funding ask IS the product loop: address goes out in the reply,
-      // user deposits, says buy again, and the fill goes through.
+      // The deposit address deliberately lives on the portfolio site, not in
+      // the reply: X rejects posts containing crypto addresses ("prohibited
+      // for the first 7 days after authentication", and spam-filtered after).
       return {
-        reply: `Your wallet’s short for that. Send at least ${formatEthAmount(shortfall)} ETH on Robinhood Chain to ${wallet.address} then tell me to buy again.`
+        reply: `Your wallet’s short for that — it needs ${formatEthAmount(shortfall)} more ETH on Robinhood Chain. Your deposit address is on your portfolio page (link in bio, @${wallet.xUsername || username}). Fund it, then tell me to buy again.`
       };
     }
 
@@ -140,7 +141,9 @@ export class OnchainBroker {
       parts.push(`${formatQty(holding.amount)} ${holding.symbol}${holding.valueUsd ? ` ($${Math.round(holding.valueUsd)})` : ""}`);
     }
     const more = holdings.length > 3 ? ` +${holdings.length - 3} more` : "";
-    return `Your wallet ${shortAddress(wallet.address)}: ${parts.join(", ")}${more}. Full view and controls at the portfolio link in bio.`;
+    // No address fragments here either — X's crypto-address filter is the
+    // reason the funding reply already points at the site.
+    return `Your wallet: ${parts.join(", ")}${more}. Full view, deposit address, and controls at the portfolio link in bio.`;
   }
 
   async fetchHoldings(address) {
@@ -164,10 +167,6 @@ export class OnchainBroker {
 // toFixed(18) would leak double-precision garbage into the wei amount.
 function usdToWei(amountUsd, ethUsd) {
   return (BigInt(Math.round(amountUsd * 1e6)) * 10n ** 18n) / BigInt(Math.round(ethUsd * 1e6));
-}
-
-function shortAddress(address) {
-  return `${address.slice(0, 6)}…${address.slice(-4)}`;
 }
 
 function formatEthAmount(value) {

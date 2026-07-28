@@ -60,15 +60,17 @@ test("pulls the asset from the bot's earlier advice and asks for size", async ()
   assert.equal(result.pendingBuy.authorId, "1");
 });
 
-test("unfunded wallet gets the deposit address, not a swap", async () => {
-  const { broker, store, swaps } = await makeBroker({ balanceEth: 0 });
+test("unfunded wallet is sent to the site to fund, never a raw address", async () => {
+  const { broker, swaps } = await makeBroker({ balanceEth: 0 });
   const result = await broker.handleBuy({
     botUsername: "mybot", authorId: "1", username: "alice",
     intent: { wantsBuy: true, amountUsd: 50, term: "NVDA" }, parentText: "", dryRun: false
   });
-  const wallet = await store.getWalletByAuthor("mybot", "1");
-  assert.ok(result.reply.includes(wallet.address));
-  assert.match(result.reply, /Robinhood Chain/);
+  // X rejects posts containing crypto addresses, so the reply must point at
+  // the portfolio site instead of embedding the deposit address.
+  assert.ok(!/0x[0-9a-fA-F]{6}/.test(result.reply));
+  assert.match(result.reply, /link in bio/);
+  assert.match(result.reply, /ETH on Robinhood Chain/);
   assert.equal(swaps.length, 0);
 });
 

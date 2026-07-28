@@ -19,6 +19,16 @@ test("the admin-verified Robinhood token beats same-symbol impersonations", asyn
   assert.equal(asset.priceUsd, 197.63);
 });
 
+test("an admin-verified ticker-squatter is not treated as official", async () => {
+  // Real case: "DoOnlyGoodEveryday" trades as DOGE, explorer-verified, but is
+  // not a Robinhood-issued token. It may resolve as a plain memecoin — never
+  // with the official flag.
+  const squatter = { ...FAKE, name: "DoOnlyGoodEveryday", is_verified_via_admin_panel: true, exchange_rate: "0.0000153", circulating_market_cap: "15333" };
+  const asset = await resolverReturning([squatter]).resolve("NVDA");
+  assert.equal(asset.official, false);
+  assert.equal(asset.address, squatter.address_hash);
+});
+
 test("an unverified, unpriced ticker resolves to nothing", async () => {
   const resolver = resolverReturning([FAKE]);
   assert.equal(await resolver.resolve("NVDA"), null);

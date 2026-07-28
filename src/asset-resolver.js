@@ -48,9 +48,11 @@ export class AssetResolver {
     const symbolMatches = tokens.filter((item) => (item.symbol ?? "").toUpperCase() === term);
     const pool = symbolMatches.length > 0 ? symbolMatches : tokens;
 
-    // A Robinhood Stock Token is verified through the explorer admin panel and
-    // carries live market data. That combination is the trust anchor.
-    const official = pool.find((item) => item.is_verified_via_admin_panel && item.exchange_rate);
+    // Explorer verification alone is NOT enough: ticker-squatters get admin
+    // verified too (a "DOGE" that is not Dogecoin). Official means issued by
+    // Robinhood — their tokens all carry the "• Robinhood Token" name suffix
+    // and market data.
+    const official = pool.find((item) => item.is_verified_via_admin_panel && item.exchange_rate && /• Robinhood Token$/.test(item.name ?? ""));
     if (official) return this.entry(official, true);
 
     // Memecoins are unverified by nature. Priced-with-market-cap is the bar:

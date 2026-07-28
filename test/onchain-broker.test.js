@@ -11,7 +11,7 @@ import { Store } from "../src/store.js";
 const CONFIG = { maxOrderUsd: 100, gasReserveEth: 0.0002, blockscoutBaseUrl: "https://example.invalid" };
 const NVDA = { address: "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC", symbol: "NVDA", name: "NVIDIA • Robinhood Token", official: true, priceUsd: 197 };
 
-async function makeBroker({ balanceEth = 0, resolveTo = NVDA } = {}) {
+async function makeBroker({ balanceEth = 0, resolveTo = NVDA, hasRoute = true } = {}) {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), "broker-test-")), "store.json"));
   await store.load();
   const swaps = [];
@@ -25,6 +25,7 @@ async function makeBroker({ balanceEth = 0, resolveTo = NVDA } = {}) {
     },
     dex: {
       ethUsdPrice: async () => 2000,
+      findBestRoute: async () => (hasRoute ? { kind: "single" } : null),
       swapEthForToken: async (signer, token, amountIn) => {
         swaps.push({ token, amountIn });
         return { hash: "0xabc", quotedOut: 10n ** 17n, minAmountOut: 1n, route: "single" };
@@ -113,6 +114,18 @@ test("ambiguous tickers fail closed asking for the contract address", async () =
     intent: { wantsBuy: true, amountUsd: 50, term: "WOJAK" }, parentText: "", dryRun: false
   });
   assert.match(result.reply, /contract address/);
+  assert.equal(swaps.length, 0);
+});
+
+test("a token with no live market is refused before any funding ask", async () => {
+  const { broker, swaps } = await makeBroker({ balanceEth: 0, hasRoute: false });
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 10, term: "DOGE" }, parentText: "", dryRun: false
+  });
+  assert.match(result.reply, /no tradable market/);
+  // Crucially: no deposit address — nobody should fund a wallet for an unbuyable token.
+  assert.ok(!result.reply.includes("0x"));
   assert.equal(swaps.length, 0);
 });
 

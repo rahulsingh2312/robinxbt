@@ -78,6 +78,14 @@ export class OnchainBroker {
       return { reply: `Couldn’t find ${term} on Robinhood Chain. If it’s a memecoin, reply with its contract address.` };
     }
 
+    // Probe for a live market BEFORE any funding ask: a token that resolves
+    // but has no pool must never cause someone to deposit ETH for a buy that
+    // can only fail.
+    const probe = await this.dex.findBestRoute(asset.address, 10n ** 15n);
+    if (!probe) {
+      return { reply: `${asset.symbol} exists on Robinhood Chain but has no tradable market right now, so I can’t buy it.` };
+    }
+
     const amountUsd = intent.amountUsd ?? pendingBuy?.amountUsd ?? null;
     if (!amountUsd) {
       // No size yet: the worker saves this against its own reply ID so the

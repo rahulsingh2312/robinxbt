@@ -267,6 +267,7 @@ function ManagePanel({ portfolio, onChange }) {
           }}
         >
           <select
+            className="wide"
             value={sell.token}
             onChange={(event) => setSell({ ...sell, token: event.target.value })}
             aria-label="Token to sell"
@@ -295,7 +296,7 @@ function ManagePanel({ portfolio, onChange }) {
           >
             Max
           </button>
-          <button disabled={busy} type="submit">Sell for ETH</button>
+          <button className="wide" disabled={busy} type="submit">Sell for ETH</button>
         </form>
       )}
 
@@ -307,6 +308,7 @@ function ManagePanel({ portfolio, onChange }) {
         }}
       >
         <select
+          className="wide"
           value={withdrawForm.asset}
           onChange={(event) => setWithdrawForm({ ...withdrawForm, asset: event.target.value })}
           aria-label="Asset to withdraw"
@@ -317,6 +319,7 @@ function ManagePanel({ portfolio, onChange }) {
           ))}
         </select>
         <input
+          className="wide"
           placeholder="0x destination"
           value={withdrawForm.to}
           onChange={(event) => setWithdrawForm({ ...withdrawForm, to: event.target.value })}
@@ -331,7 +334,7 @@ function ManagePanel({ portfolio, onChange }) {
           style={{ width: 130 }}
           aria-label="Withdraw amount"
         />
-        <button disabled={busy} type="submit">Withdraw</button>
+        <button className="wide" disabled={busy} type="submit">Withdraw</button>
       </form>
 
       <div className="stack manage-section" style={{ gap: 10 }}>

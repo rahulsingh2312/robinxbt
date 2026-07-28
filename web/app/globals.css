@@ -310,6 +310,11 @@ a.btn-quiet {
 .manage-section { border-top: 1px solid var(--line); padding-top: 18px; }
 .manage-section .section-label { font-weight: 600; font-size: 0.9rem; }
 .manage-section .section-sub { color: var(--muted); font-size: 0.8rem; margin: 2px 0 0; }
+/* Label left, action right, on ONE line at every width: the text column
+   shrinks and wraps, the button never drops below it. */
+.manage-section .spread { flex-wrap: nowrap; align-items: center; }
+.manage-section .spread > div { min-width: 0; }
+.manage-section .spread > button { flex-shrink: 0; }
 @media (prefers-reduced-motion: reduce) { button:hover { transform: none; } }
 
 .address {
@@ -365,10 +370,21 @@ a.btn-quiet {
   /* Deposit: the QR is the object of the card. Center it. */
   .qr-box { margin: 0 auto; }
 
-  /* Manage and search controls: one clean column, no ragged wraps. */
-  .card form.row select,
-  .card form.row input,
-  .card form.row button { flex: 1 1 100%; width: 100%; }
+  /* Manage controls on a two-column grid: full-width rows for the select,
+     destination, and submit; amount and Max share the last row. */
+  .card form.row { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+  .card form.row > * { width: 100%; }
+  .card form.row > .wide { grid-column: 1 / -1; }
+  .card form.row > button.quiet { width: auto; padding-left: 18px; padding-right: 18px; }
+
+  /* Phone selects: fixed height and 16px type so iOS neither squashes the
+     control nor zooms the page, and the chevron stays clear of the text. */
+  input, select, button { font-size: 16px; }
+  select { height: 50px; padding-top: 0; padding-bottom: 0; }
+
+  /* The private-key row stays a row; only its text wraps. */
+  .manage-section .spread { gap: 14px; }
+  .manage-section .section-sub { font-size: 0.74rem; }
 
   .owner img { width: 40px; height: 40px; }
   .owner .handle { font-size: 1.15rem; }

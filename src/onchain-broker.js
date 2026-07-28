@@ -111,16 +111,25 @@ export class OnchainBroker {
     ]);
     const usdgBalance = (await this.chain.getTokenBalance(usdgAddress, wallet.address)).raw;
 
-    // The wallet spends whichever asset covers the order: ETH first, then
-    // USDG dollar-for-dollar. Either way a sliver of ETH stays reserved,
-    // because every path still pays gas in ETH.
+    // The wallet spends whichever asset covers the order — USDG first (it's
+    // the dollar, so a $50 buy is exactly $50), falling back to ETH. The user
+    // is never asked which; the wallet decides. Every path still pays gas in
+    // ETH, so a sliver stays reserved.
     const wantWei = usdToWei(amountUsd, ethUsd);
     const usdgUnits = BigInt(Math.round(amountUsd * 10 ** usdgDecimals));
     let spend = null;
-    if (ethBalance >= wantWei + gasReserve) {
-      spend = { tokenIn: NATIVE, amountIn: wantWei, label: `~${formatEthAmount(amountEth)} ETH` };
-    } else if (usdgBalance >= usdgUnits && ethBalance >= gasReserve) {
+    if (usdgBalance >= usdgUnits && ethBalance >= gasReserve) {
       spend = { tokenIn: usdgAddress, amountIn: usdgUnits, label: `$${amountUsd} USDG` };
+    } else if (ethBalance >= wantWei + gasReserve) {
+      spend = { tokenIn: NATIVE, amountIn: wantWei, label: `~${formatEthAmount(amountEth)} ETH` };
+    }
+
+    // Dollars present but nothing to pay the network with: a precise ask
+    // beats the generic funding message.
+    if (!spend && usdgBalance >= usdgUnits) {
+      return {
+        reply: `You’ve got the $${amountUsd} in USDG, but no ETH for gas. Send a little ETH on Robinhood Chain (${formatEthAmount(Math.max(this.config.gasReserveEth * 2, 0.0005))} covers it) — address on your portfolio page, link in bio — then tell me to buy again.`
+      };
     }
 
     if (!spend) {

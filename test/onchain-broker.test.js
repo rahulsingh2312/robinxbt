@@ -101,14 +101,24 @@ test("a wallet holding USDG but little ETH buys with USDG", async () => {
   assert.match(result.reply, /Bought/);
 });
 
-test("USDG without gas ETH still gets the funding ask", async () => {
+test("USDG without gas ETH gets a precise gas ask, not a generic one", async () => {
   const { broker, swaps } = await makeBroker({ balanceEth: 0, balanceUsdg: 100 });
   const result = await broker.handleBuy({
     botUsername: "mybot", authorId: "1", username: "alice",
     intent: { wantsBuy: true, amountUsd: 50, term: "NVDA" }, parentText: "", dryRun: false
   });
-  assert.match(result.reply, /short for that/);
+  assert.match(result.reply, /no ETH for gas/);
+  assert.match(result.reply, /link in bio/);
   assert.equal(swaps.length, 0);
+});
+
+test("USDG wins over ETH when both could cover the buy", async () => {
+  const { broker, swaps } = await makeBroker({ balanceEth: 5, balanceUsdg: 500 });
+  await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 50, term: "NVDA" }, parentText: "", dryRun: false
+  });
+  assert.equal(swaps[0].tokenIn, USDG);
 });
 
 test("funded wallet swaps and the reply points at the portfolio link in bio", async () => {

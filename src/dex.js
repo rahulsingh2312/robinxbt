@@ -1,4 +1,4 @@
-import { AbiCoder, Contract, ZeroAddress } from "ethers";
+import { AbiCoder, Contract, MaxUint256, ZeroAddress } from "ethers";
 
 // Uniswap v4 on Robinhood Chain (chain id 4663), from the official Uniswap
 // deployment registry. Stock Tokens and memecoins both trade here; the USDG
@@ -6,13 +6,14 @@ import { AbiCoder, Contract, ZeroAddress } from "ethers";
 export const DEX_ADDRESSES = {
   universalRouter: "0x8876789976decbfcbbbe364623c63652db8c0904",
   quoter: "0x8dc178efb8111bb0973dd9d722ebeff267c98f94",
+  permit2: "0x000000000022D473030F116dDEE9F6B43aC78BA3",
   weth: "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
   usdg: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168"
 };
 
 // In v4 the native coin is currency address(0); no WETH wrapping, and an
-// ETH-in swap needs no token approval at all — which is why the bot only ever
-// buys with ETH. That keeps user funds one signature away from the pool.
+// ETH-in swap needs no token approval at all. ERC-20 inputs (USDG buys,
+// sells) settle through Permit2, which ensureAllowances() prepares.
 export const NATIVE = ZeroAddress;
 
 const QUOTER_ABI = [
@@ -22,9 +23,22 @@ const QUOTER_ABI = [
 
 const ROUTER_ABI = ["function execute(bytes commands, bytes[] inputs, uint256 deadline) payable"];
 
+const PERMIT2_ABI = [
+  "function allowance(address user, address token, address spender) view returns (uint160 amount, uint48 expiration, uint48 nonce)",
+  "function approve(address token, address spender, uint160 amount, uint48 expiration)"
+];
+
+const ERC20_ALLOWANCE_ABI = [
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 value) returns (bool)"
+];
+
 // Universal Router command / v4 action bytes, from Commands.sol and Actions.sol.
 const V4_SWAP = "0x10";
 const ACTIONS = { SWAP_EXACT_IN_SINGLE: 0x06, SWAP_EXACT_IN: 0x07, SETTLE_ALL: 0x0c, TAKE_ALL: 0x0f };
+
+const MAX_UINT160 = (1n << 160n) - 1n;
+const MAX_UINT48 = (1n << 48n) - 1n;
 
 // Standard hookless fee tiers. Pools with hooks (dynamic fees, market-hours
 // gates) cannot be guessed, so discovery can be extended per token via the
@@ -35,6 +49,10 @@ const coder = AbiCoder.defaultAbiCoder();
 
 function sortCurrencies(a, b) {
   return BigInt(a) < BigInt(b) ? [a, b] : [b, a];
+}
+
+function sameAddress(a, b) {
+  return a.toLowerCase() === b.toLowerCase();
 }
 
 export class Dex {
@@ -53,11 +71,11 @@ export class Dex {
 
   async quoteSingle(tokenIn, tokenOut, fee, tickSpacing, amountIn) {
     const key = this.poolKey(tokenIn, tokenOut, fee, tickSpacing);
-    const zeroForOne = key.currency0.toLowerCase() === tokenIn.toLowerCase();
+    const zeroForOne = sameAddress(key.currency0, tokenIn);
     const [amountOut] = await this.quoterContract.quoteExactInputSingle.staticCall({
       poolKey: key, zeroForOne, exactAmount: amountIn, hookData: "0x"
     });
-    return { kind: "single", poolKey: key, zeroForOne, amountOut };
+    return { kind: "single", tokenIn, poolKey: key, zeroForOne, amountOut };
   }
 
   async quotePath(tokenIn, path, amountIn) {
@@ -67,22 +85,25 @@ export class Dex {
     return { kind: "path", tokenIn, path, amountOut };
   }
 
-  // Tries every hookless candidate route from ETH to the token — direct pools
-  // on each fee tier plus two-hop through USDG — and keeps whichever quotes
-  // the most output. A token with no live pool yields null, which the caller
-  // turns into an honest "no market" reply instead of a revert.
-  async findBestRoute(tokenOut, amountInWei) {
+  // Tries every hookless candidate route between two assets — direct pools on
+  // each fee tier plus two-hop through the hub currencies (ETH, USDG) — and
+  // keeps whichever quotes the most output. No live pool yields null, which
+  // callers turn into an honest "no market" answer instead of a revert.
+  async findBestRoute(tokenIn, tokenOut, amountInWei) {
     const attempts = [];
     for (const [fee, tickSpacing] of FEE_TIERS) {
-      attempts.push(this.quoteSingle(NATIVE, tokenOut, fee, tickSpacing, amountInWei).catch(() => null));
+      attempts.push(this.quoteSingle(tokenIn, tokenOut, fee, tickSpacing, amountInWei).catch(() => null));
     }
-    for (const [fee1, tick1] of FEE_TIERS) {
-      for (const [fee2, tick2] of FEE_TIERS) {
-        const path = [
-          { intermediateCurrency: this.addresses.usdg, fee: fee1, tickSpacing: tick1, hooks: ZeroAddress, hookData: "0x" },
-          { intermediateCurrency: tokenOut, fee: fee2, tickSpacing: tick2, hooks: ZeroAddress, hookData: "0x" }
-        ];
-        attempts.push(this.quotePath(NATIVE, path, amountInWei).catch(() => null));
+    const hubs = [NATIVE, this.addresses.usdg].filter((hub) => !sameAddress(hub, tokenIn) && !sameAddress(hub, tokenOut));
+    for (const hub of hubs) {
+      for (const [fee1, tick1] of FEE_TIERS) {
+        for (const [fee2, tick2] of FEE_TIERS) {
+          const path = [
+            { intermediateCurrency: hub, fee: fee1, tickSpacing: tick1, hooks: ZeroAddress, hookData: "0x" },
+            { intermediateCurrency: tokenOut, fee: fee2, tickSpacing: tick2, hooks: ZeroAddress, hookData: "0x" }
+          ];
+          attempts.push(this.quotePath(tokenIn, path, amountInWei).catch(() => null));
+        }
       }
     }
     const routes = (await Promise.all(attempts)).filter(Boolean).filter((route) => route.amountOut > 0n);
@@ -93,19 +114,13 @@ export class Dex {
   // USD sizing runs through the ETH/USDG pool: how many dollars one ETH buys
   // right now IS the exchange rate the user's buy will actually clear at.
   async ethUsdPrice() {
-    const oneEth = 10n ** 18n;
-    const route = await this.findBestUsdgRoute(oneEth);
-    if (!route) throw new Error("No ETH/USDG pool found to price USD orders");
-    const decimals = await this.usdgDecimals();
-    return Number(route.amountOut) / 10 ** decimals;
-  }
-
-  async findBestUsdgRoute(amountInWei) {
     const attempts = FEE_TIERS.map(([fee, tick]) =>
-      this.quoteSingle(NATIVE, this.addresses.usdg, fee, tick, amountInWei).catch(() => null)
+      this.quoteSingle(NATIVE, this.addresses.usdg, fee, tick, 10n ** 18n).catch(() => null)
     );
     const routes = (await Promise.all(attempts)).filter(Boolean).filter((route) => route.amountOut > 0n);
-    return routes.length ? routes.reduce((best, route) => (route.amountOut > best.amountOut ? route : best)) : null;
+    if (routes.length === 0) throw new Error("No ETH/USDG pool found to price USD orders");
+    const best = routes.reduce((a, b) => (b.amountOut > a.amountOut ? b : a));
+    return Number(best.amountOut) / 10 ** (await this.usdgDecimals());
   }
 
   async usdgDecimals() {
@@ -120,10 +135,10 @@ export class Dex {
     return (amountOut * BigInt(10000 - this.slippageBps)) / 10000n;
   }
 
-  // Encodes UniversalRouter.execute for an exact-in ETH -> token swap.
-  // SETTLE_ALL pays the router's ETH in, TAKE_ALL sweeps the full token
-  // output back to the sender, and minOut makes slippage revert on-chain
-  // rather than fill badly.
+  // Encodes UniversalRouter.execute for an exact-in swap in either direction.
+  // SETTLE_ALL pays the input (ETH by value, ERC-20 through Permit2), TAKE_ALL
+  // sweeps the full output back to the sender, and minOut makes slippage
+  // revert on-chain rather than fill badly.
   buildSwapCalldata(route, tokenOut, amountInWei, minAmountOut, deadline) {
     let actions;
     let swapParams;
@@ -149,25 +164,48 @@ export class Dex {
     }
     const params = [
       swapParams,
-      coder.encode(["address", "uint256"], [NATIVE, amountInWei]),
+      coder.encode(["address", "uint256"], [route.tokenIn, amountInWei]),
       coder.encode(["address", "uint256"], [tokenOut, minAmountOut])
     ];
     const input = coder.encode(["bytes", "bytes[]"], ["0x" + actions.toString("hex"), params]);
     return { commands: V4_SWAP, inputs: [input], deadline };
   }
 
+  // ERC-20 inputs settle via Permit2, which needs two standing approvals:
+  // token -> Permit2, and Permit2 -> Universal Router. Both are granted once
+  // at max and reused, so the first sell/USDG-buy costs two extra cheap L2
+  // transactions and later ones cost none.
+  async ensureAllowances(signer, token, amountIn) {
+    const owner = await signer.getAddress();
+    const erc20 = new Contract(token, ERC20_ALLOWANCE_ABI, signer);
+    if ((await erc20.allowance(owner, this.addresses.permit2)) < amountIn) {
+      await (await erc20.approve(this.addresses.permit2, MaxUint256)).wait();
+    }
+    const permit2 = new Contract(this.addresses.permit2, PERMIT2_ABI, signer);
+    const [allowed, expiration] = await permit2.allowance(owner, token, this.addresses.universalRouter);
+    const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
+    if (allowed < amountIn || expiration <= nowSeconds) {
+      await (await permit2.approve(token, this.addresses.universalRouter, MAX_UINT160, MAX_UINT48)).wait();
+    }
+  }
+
   // Quotes, applies slippage, sends, and waits for inclusion. `signer` holds
-  // the buyer's own key; the value sent is exactly amountInWei.
-  async swapEthForToken(signer, tokenOut, amountInWei) {
-    const route = await this.findBestRoute(tokenOut, amountInWei);
-    if (!route) throw new Error("no liquidity route found for this token");
+  // the owner's own key; ETH input is sent as value, ERC-20 input via Permit2.
+  async swap(signer, tokenIn, tokenOut, amountInWei) {
+    const route = await this.findBestRoute(tokenIn, tokenOut, amountInWei);
+    if (!route) throw new Error("no liquidity route found for this pair");
+    if (!sameAddress(tokenIn, NATIVE)) await this.ensureAllowances(signer, tokenIn, amountInWei);
     const minAmountOut = this.minOut(route.amountOut);
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 120);
     const { commands, inputs } = this.buildSwapCalldata(route, tokenOut, amountInWei, minAmountOut, deadline);
     const router = new Contract(this.addresses.universalRouter, ROUTER_ABI, signer);
-    const tx = await router.execute(commands, inputs, deadline, { value: amountInWei });
+    const tx = await router.execute(commands, inputs, deadline, { value: sameAddress(tokenIn, NATIVE) ? amountInWei : 0n });
     const receipt = await tx.wait();
     if (receipt.status !== 1) throw new Error(`swap reverted in tx ${receipt.hash}`);
     return { hash: receipt.hash, quotedOut: route.amountOut, minAmountOut, route: route.kind };
+  }
+
+  async swapEthForToken(signer, tokenOut, amountInWei) {
+    return this.swap(signer, NATIVE, tokenOut, amountInWei);
   }
 }

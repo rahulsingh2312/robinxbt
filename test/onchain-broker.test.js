@@ -11,7 +11,9 @@ import { Store } from "../src/store.js";
 const CONFIG = { maxOrderUsd: 100, gasReserveEth: 0.0002, blockscoutBaseUrl: "https://example.invalid" };
 const NVDA = { address: "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC", symbol: "NVDA", name: "NVIDIA • Robinhood Token", official: true, priceUsd: 197 };
 
-async function makeBroker({ balanceEth = 0, resolveTo = NVDA, hasRoute = true } = {}) {
+const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
+
+async function makeBroker({ balanceEth = 0, balanceUsdg = 0, resolveTo = NVDA, hasRoute = true, config = CONFIG } = {}) {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), "broker-test-")), "store.json"));
   await store.load();
   const swaps = [];
@@ -21,18 +23,21 @@ async function makeBroker({ balanceEth = 0, resolveTo = NVDA, hasRoute = true } 
     chain: {
       provider: {},
       getEthBalance: async () => parseEther(String(balanceEth)),
+      getTokenBalance: async () => ({ raw: BigInt(Math.round(balanceUsdg * 1e6)) }),
       getTokenMeta: async () => ({ decimals: 18, symbol: resolveTo?.symbol ?? "?" })
     },
     dex: {
+      addresses: { usdg: USDG },
+      usdgDecimals: async () => 6,
       ethUsdPrice: async () => 2000,
       findBestRoute: async () => (hasRoute ? { kind: "single" } : null),
-      swapEthForToken: async (signer, token, amountIn) => {
-        swaps.push({ token, amountIn });
+      swap: async (signer, tokenIn, tokenOut, amountIn) => {
+        swaps.push({ tokenIn, token: tokenOut, amountIn });
         return { hash: "0xabc", quotedOut: 10n ** 17n, minAmountOut: 1n, route: "single" };
       }
     },
     resolver: { resolve: async () => resolveTo },
-    config: CONFIG,
+    config,
     logger: { info() {}, warn() {}, error() {} }
   });
   return { broker, store, swaps };
@@ -70,7 +75,39 @@ test("unfunded wallet is sent to the site to fund, never a raw address", async (
   // the portfolio site instead of embedding the deposit address.
   assert.ok(!/0x[0-9a-fA-F]{6}/.test(result.reply));
   assert.match(result.reply, /link in bio/);
-  assert.match(result.reply, /ETH on Robinhood Chain/);
+  assert.match(result.reply, /more ETH \(or \$50 USDG/);
+  assert.equal(swaps.length, 0);
+});
+
+test("ONCHAIN_ADDRESS_IN_REPLIES restores the inline deposit address", async () => {
+  const { broker, store } = await makeBroker({ balanceEth: 0, config: { ...CONFIG, addressInReplies: true } });
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 50, term: "NVDA" }, parentText: "", dryRun: false
+  });
+  const wallet = await store.getWalletByAuthor("mybot", "1");
+  assert.ok(result.reply.includes(wallet.address));
+});
+
+test("a wallet holding USDG but little ETH buys with USDG", async () => {
+  const { broker, swaps } = await makeBroker({ balanceEth: 0.001, balanceUsdg: 100 });
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 50, term: "NVDA" }, parentText: "", dryRun: false
+  });
+  assert.equal(swaps.length, 1);
+  assert.equal(swaps[0].tokenIn, USDG);
+  assert.equal(swaps[0].amountIn, 50_000_000n); // $50 in 6-decimal USDG
+  assert.match(result.reply, /Bought/);
+});
+
+test("USDG without gas ETH still gets the funding ask", async () => {
+  const { broker, swaps } = await makeBroker({ balanceEth: 0, balanceUsdg: 100 });
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 50, term: "NVDA" }, parentText: "", dryRun: false
+  });
+  assert.match(result.reply, /short for that/);
   assert.equal(swaps.length, 0);
 });
 

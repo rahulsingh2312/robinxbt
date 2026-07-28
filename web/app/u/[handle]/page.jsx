@@ -1,10 +1,11 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
+import QRCode from "qrcode";
 
-// One page, two modes: anyone can view a handle's holdings (they are public
-// on-chain anyway), but the manage panel appears only when the signed-in X
-// account matches the wallet's owner.
+// A statement, not a dashboard: total first, deposit next (the loop people
+// arrive here to close), holdings, then manage. Manage only renders for the
+// signed-in owner; viewing is public because the chain already is.
 export default function PortfolioPage({ params }) {
   const { handle } = use(params);
   const [portfolio, setPortfolio] = useState(null);
@@ -27,61 +28,152 @@ export default function PortfolioPage({ params }) {
     }).catch(() => {});
   }, [handle]);
 
-  if (error) {
-    return (
-      <main>
-        <h1>@{handle}</h1>
-        <p className="muted">{error}</p>
-        <p>Mention the bot on X and a wallet appears here automatically.</p>
-      </main>
-    );
-  }
-  if (!portfolio) return <main><p className="muted">Loading…</p></main>;
-
-  const owns = me?.username === portfolio.username;
   return (
-    <main>
-      <p className="eyebrow">ON-CHAIN PORTFOLIO · ROBINHOOD CHAIN</p>
-      <h1>@{portfolio.username}</h1>
-      <div className="card total">
-        <span className="muted">Total value</span>
-        <strong>{usd(portfolio.totalUsd)}</strong>
-      </div>
-      <div className="card">
-        <p className="muted" style={{ margin: 0 }}>Deposit address (send ETH on Robinhood Chain, chain id 4663)</p>
-        <p className="address">{portfolio.address}</p>
-        <p style={{ margin: 0 }}>
-          <a href={portfolio.explorer} target="_blank" rel="noreferrer">View on explorer ↗</a>
-        </p>
-      </div>
-      <table>
-        <thead><tr><th>Asset</th><th>Amount</th><th>Value</th></tr></thead>
-        <tbody>
-          <tr><td><strong>ETH</strong></td><td>{qty(portfolio.eth.amount)}</td><td>{usd(portfolio.eth.valueUsd)}</td></tr>
-          {portfolio.tokens.map((token) => (
-            <tr key={token.address}>
-              <td><strong>{token.symbol}</strong><br /><span className="muted">{token.name}</span></td>
-              <td>{qty(token.amount)}</td>
-              <td>{usd(token.valueUsd)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <main className="stack" style={{ gap: 24 }}>
+      <nav className="spread">
+        <a className="wordmark" href="/">peterpan<span>.</span></a>
+        <span className="pill">CHAIN ID 4663</span>
+      </nav>
 
-      {owns ? <ManagePanel portfolio={portfolio} onChange={refresh} /> : (
-        <div className="card">
-          <p style={{ margin: 0 }}>
-            Your wallet? <a href={`/auth/x/login?return=/u/${encodeURIComponent(handle)}`}>Sign in with X</a> to
-            withdraw or export your key.
-          </p>
-        </div>
+      {error ? (
+        <section className="card stack" style={{ gap: 8 }}>
+          <h1>@{handle}</h1>
+          <p className="muted" style={{ margin: 0 }}>{error}</p>
+          <p style={{ margin: 0 }}>Mention @TryPeterpan on X and a wallet appears here on its own.</p>
+        </section>
+      ) : !portfolio ? (
+        <LoadingStatement handle={handle} />
+      ) : (
+        <Statement portfolio={portfolio} me={me} onChange={refresh} />
       )}
 
-      <p className="risk">
-        Balances read live from Robinhood Chain. Buys happen only by talking to the bot on X.
-        Not investment advice; tokens can go to zero. Robinhood Stock Tokens are not offered to U.S. persons.
+      <p className="fineprint">
+        Balances read live from Robinhood Chain. Buys happen only by talking to
+        the bot on X. Not investment advice; tokens can go to zero. Robinhood
+        Stock Tokens are not offered to U.S., Canadian, UK, or Swiss persons.
       </p>
     </main>
+  );
+}
+
+function LoadingStatement({ handle }) {
+  return (
+    <section className="stack" style={{ gap: 16 }} aria-busy="true">
+      <h1>@{handle}</h1>
+      <div className="card stack" style={{ gap: 10 }}>
+        <div className="skeleton" style={{ width: "38%" }} />
+        <div className="skeleton" style={{ width: "62%", height: 40 }} />
+      </div>
+      <div className="card stack" style={{ gap: 10 }}>
+        <div className="skeleton" style={{ width: "50%" }} />
+        <div className="skeleton" style={{ width: "100%" }} />
+      </div>
+    </section>
+  );
+}
+
+function Statement({ portfolio, me, onChange }) {
+  const owns = me?.username === portfolio.username;
+  return (
+    <>
+      <header className="spread">
+        <h1>@{portfolio.username}</h1>
+        {!owns && (
+          <a href={`/auth/x/login?return=/u/${encodeURIComponent(portfolio.username)}`}>
+            Your wallet? Sign in with X →
+          </a>
+        )}
+      </header>
+
+      <section className="card stack" style={{ gap: 6 }}>
+        <p className="eyebrow" style={{ margin: 0 }}>Total value</p>
+        <div className="total-figure">{usd(portfolio.totalUsd)}</div>
+        <p className="muted num" style={{ margin: 0, fontSize: "0.85rem" }}>
+          {qty(portfolio.eth.amount)} ETH · {portfolio.tokens.length} token{portfolio.tokens.length === 1 ? "" : "s"}
+        </p>
+      </section>
+
+      <DepositCard address={portfolio.address} explorer={portfolio.explorer} />
+
+      <section className="card stack" style={{ gap: 4 }}>
+        <div className="spread">
+          <h2>Holdings</h2>
+          <span className="pill">LIVE FROM CHAIN</span>
+        </div>
+        <div className="table-scroll">
+          <table>
+            <thead><tr><th>Asset</th><th>Amount</th><th>Value</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><div className="asset"><span className="tick">ETH</span></div></td>
+                <td className="num">{qty(portfolio.eth.amount)}</td>
+                <td className="num">{usd(portfolio.eth.valueUsd)}</td>
+              </tr>
+              {portfolio.tokens.map((token) => (
+                <tr key={token.address}>
+                  <td>
+                    <div className="asset">
+                      {token.icon ? <img src={token.icon} alt="" /> : null}
+                      <span>
+                        <span className="tick">{token.symbol}</span>
+                        <small>{token.name}</small>
+                      </span>
+                    </div>
+                  </td>
+                  <td className="num">{qty(token.amount)}</td>
+                  <td className="num">{usd(token.valueUsd)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {owns && <ManagePanel portfolio={portfolio} onChange={onChange} />}
+    </>
+  );
+}
+
+function DepositCard({ address, explorer }) {
+  const canvasRef = useRef(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (canvasRef.current) {
+      QRCode.toCanvas(canvasRef.current, address, { width: 132, margin: 0 }).catch(() => {});
+    }
+  }, [address]);
+
+  return (
+    <section className="card stack" style={{ gap: 12 }}>
+      <div className="spread">
+        <h2>Deposit</h2>
+        <span className="pill">ETH OR USDG · ROBINHOOD CHAIN ONLY</span>
+      </div>
+      <div className="row" style={{ alignItems: "flex-start", gap: 16 }}>
+        <div className="qr-box"><canvas ref={canvasRef} /></div>
+        <div className="stack" style={{ gap: 10, flex: 1, minWidth: 220 }}>
+          <div className="address">{address}</div>
+          <div className="row">
+            <button
+              className="quiet"
+              type="button"
+              onClick={async () => {
+                await navigator.clipboard.writeText(address);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              }}
+            >
+              {copied ? "Copied" : "Copy address"}
+            </button>
+            <a href={explorer} target="_blank" rel="noreferrer">Explorer ↗</a>
+          </div>
+          <p className="warn-text" style={{ margin: 0 }}>
+            Send only on Robinhood Chain (chain id 4663). Funds sent on other networks are gone.
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -89,68 +181,136 @@ function ManagePanel({ portfolio, onChange }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
   const [revealed, setRevealed] = useState(null);
-  const [form, setForm] = useState({ asset: "eth", to: "", amount: "" });
+  const [sell, setSell] = useState({ token: "", amount: "" });
+  const [withdrawForm, setWithdrawForm] = useState({ asset: "eth", to: "", amount: "" });
 
-  const withdraw = async (event) => {
-    event.preventDefault();
+  const post = async (path, body) => {
     setBusy(true); setMessage(null);
     try {
-      const response = await fetch("/api/onchain/withdraw", {
+      const response = await fetch(path, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(form)
+        body: JSON.stringify(body)
       });
-      const body = await response.json();
-      setMessage(response.ok ? `Sent. Tx ${body.hash}` : body.error);
+      const payload = await response.json();
+      setMessage(response.ok ? `Done. Tx ${payload.hash}` : payload.error);
       if (response.ok) onChange();
+      return response.ok;
     } finally {
       setBusy(false);
     }
   };
 
-  const exportKey = async () => {
-    if (!window.confirm("Your private key controls ALL funds in this wallet. Anyone who sees it can take everything. Reveal it now?")) return;
-    const response = await fetch("/api/onchain/export-key", { method: "POST" });
-    const body = await response.json();
-    setRevealed(response.ok ? body.privateKey : null);
-    setMessage(response.ok ? null : body.error);
-  };
+  const sellable = portfolio.tokens.filter((token) => token.amount > 0);
 
   return (
-    <div className="card">
-      <h2 style={{ marginTop: 0 }}>Manage</h2>
-      <form className="row" onSubmit={withdraw}>
-        <select value={form.asset} onChange={(event) => setForm({ ...form, asset: event.target.value })}>
+    <section className="card stack" style={{ gap: 18 }}>
+      <h2>Manage</h2>
+
+      {sellable.length > 0 && (
+        <form
+          className="row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (sell.token && Number(sell.amount) > 0) post("/api/onchain/sell", sell);
+          }}
+        >
+          <select
+            value={sell.token}
+            onChange={(event) => setSell({ ...sell, token: event.target.value })}
+            aria-label="Token to sell"
+          >
+            <option value="">Sell…</option>
+            {sellable.map((token) => (
+              <option key={token.address} value={token.address}>{token.symbol}</option>
+            ))}
+          </select>
+          <input
+            className="num"
+            placeholder="amount"
+            value={sell.amount}
+            onChange={(event) => setSell({ ...sell, amount: event.target.value })}
+            style={{ width: 130 }}
+            aria-label="Sell amount"
+          />
+          <button
+            className="quiet"
+            type="button"
+            disabled={!sell.token}
+            onClick={() => {
+              const token = sellable.find((candidate) => candidate.address === sell.token);
+              if (token) setSell({ ...sell, amount: String(token.amount) });
+            }}
+          >
+            Max
+          </button>
+          <button disabled={busy} type="submit">Sell for ETH</button>
+        </form>
+      )}
+
+      <form
+        className="row"
+        onSubmit={(event) => {
+          event.preventDefault();
+          post("/api/onchain/withdraw", withdrawForm);
+        }}
+      >
+        <select
+          value={withdrawForm.asset}
+          onChange={(event) => setWithdrawForm({ ...withdrawForm, asset: event.target.value })}
+          aria-label="Asset to withdraw"
+        >
           <option value="eth">ETH</option>
           {portfolio.tokens.map((token) => (
             <option key={token.address} value={token.address}>{token.symbol}</option>
           ))}
         </select>
         <input
-          placeholder="0x destination address"
-          value={form.to}
-          onChange={(event) => setForm({ ...form, to: event.target.value })}
-          style={{ flex: 1, minWidth: 260 }}
+          placeholder="0x destination"
+          value={withdrawForm.to}
+          onChange={(event) => setWithdrawForm({ ...withdrawForm, to: event.target.value })}
+          style={{ flex: 1, minWidth: 240 }}
+          aria-label="Destination address"
         />
         <input
+          className="num"
           placeholder="amount"
-          value={form.amount}
-          onChange={(event) => setForm({ ...form, amount: event.target.value })}
-          style={{ width: 110 }}
+          value={withdrawForm.amount}
+          onChange={(event) => setWithdrawForm({ ...withdrawForm, amount: event.target.value })}
+          style={{ width: 130 }}
+          aria-label="Withdraw amount"
         />
         <button disabled={busy} type="submit">Withdraw</button>
       </form>
-      <p style={{ marginBottom: 0 }}>
-        <button className="danger" type="button" onClick={exportKey}>Export private key</button>
-      </p>
-      {revealed && (
-        <>
-          <p className="address">{revealed}</p>
-          <p className="warn">Import it into a wallet you control, then treat this one as compromised convenience custody.</p>
-        </>
-      )}
-      {message && <p className="muted">{message}</p>}
-    </div>
+
+      <div className="stack" style={{ gap: 8 }}>
+        <div className="row">
+          <button
+            className="danger"
+            type="button"
+            onClick={async () => {
+              if (!window.confirm("Your private key controls ALL funds in this wallet. Anyone who sees it can take everything. Reveal it now?")) return;
+              const response = await fetch("/api/onchain/export-key", { method: "POST" });
+              const payload = await response.json();
+              if (response.ok) { setRevealed(payload.privateKey); setMessage(null); }
+              else setMessage(payload.error);
+            }}
+          >
+            Export private key
+          </button>
+        </div>
+        {revealed && (
+          <>
+            <div className="address">{revealed}</div>
+            <p className="warn-text" style={{ margin: 0 }}>
+              Import it into a wallet you control, then treat this one as compromised convenience custody.
+            </p>
+          </>
+        )}
+      </div>
+
+      {message && <p className={message.startsWith("Done") ? "muted num" : "error-text"} style={{ margin: 0, wordBreak: "break-all" }}>{message}</p>}
+    </section>
   );
 }
 

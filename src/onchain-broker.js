@@ -1,5 +1,6 @@
 import { formatEther, parseEther } from "ethers";
 import { extractAssetTerms } from "./asset-resolver.js";
+import { NATIVE } from "./dex.js";
 
 // Reads a buy out of a mention. Unlike the operator-account parser this one
 // accepts contract addresses and long memecoin tickers, and it tolerates a
@@ -80,8 +81,9 @@ export class OnchainBroker {
 
     // Probe for a live market BEFORE any funding ask: a token that resolves
     // but has no pool must never cause someone to deposit ETH for a buy that
-    // can only fail.
-    const probe = await this.dex.findBestRoute(asset.address, 10n ** 15n);
+    // can only fail. Probing from ETH covers USDG-quoted pools too, because
+    // route discovery includes the two-hop through USDG.
+    const probe = await this.dex.findBestRoute(NATIVE, asset.address, 10n ** 15n);
     if (!probe) {
       return { reply: `${asset.symbol} exists on Robinhood Chain but has no tradable market right now, so I can’t buy it.` };
     }
@@ -101,26 +103,47 @@ export class OnchainBroker {
 
     const ethUsd = await this.dex.ethUsdPrice();
     const amountEth = amountUsd / ethUsd;
-    const amountInWei = usdToWei(amountUsd, ethUsd);
-    const balance = await this.chain.getEthBalance(wallet.address);
     const gasReserve = parseEther(String(this.config.gasReserveEth));
+    const usdgAddress = this.dex.addresses.usdg;
+    const [ethBalance, usdgDecimals] = await Promise.all([
+      this.chain.getEthBalance(wallet.address),
+      this.dex.usdgDecimals()
+    ]);
+    const usdgBalance = (await this.chain.getTokenBalance(usdgAddress, wallet.address)).raw;
 
-    if (balance < amountInWei + gasReserve) {
-      const shortfall = Number(formatEther(amountInWei + gasReserve - balance));
-      // The deposit address deliberately lives on the portfolio site, not in
-      // the reply: X rejects posts containing crypto addresses ("prohibited
-      // for the first 7 days after authentication", and spam-filtered after).
+    // The wallet spends whichever asset covers the order: ETH first, then
+    // USDG dollar-for-dollar. Either way a sliver of ETH stays reserved,
+    // because every path still pays gas in ETH.
+    const wantWei = usdToWei(amountUsd, ethUsd);
+    const usdgUnits = BigInt(Math.round(amountUsd * 10 ** usdgDecimals));
+    let spend = null;
+    if (ethBalance >= wantWei + gasReserve) {
+      spend = { tokenIn: NATIVE, amountIn: wantWei, label: `~${formatEthAmount(amountEth)} ETH` };
+    } else if (usdgBalance >= usdgUnits && ethBalance >= gasReserve) {
+      spend = { tokenIn: usdgAddress, amountIn: usdgUnits, label: `$${amountUsd} USDG` };
+    }
+
+    if (!spend) {
+      const shortfall = Number(formatEther(wantWei + gasReserve - ethBalance));
+      // The deposit address normally lives on the portfolio site, not in the
+      // reply: X rejects posts containing crypto addresses ("prohibited for
+      // the first 7 days after authentication", and spam-filtered after).
+      // ONCHAIN_ADDRESS_IN_REPLIES restores the inline address once the
+      // account is old enough to be allowed to post one.
+      const where = this.config.addressInReplies
+        ? `Send to ${wallet.address} on Robinhood Chain`
+        : `Your deposit address is on your portfolio page (link in bio, @${wallet.xUsername || username})`;
       return {
-        reply: `Your wallet’s short for that — it needs ${formatEthAmount(shortfall)} more ETH on Robinhood Chain. Your deposit address is on your portfolio page (link in bio, @${wallet.xUsername || username}). Fund it, then tell me to buy again.`
+        reply: `Your wallet’s short for that — send ${formatEthAmount(shortfall)} more ETH (or $${amountUsd} USDG plus gas dust). ${where}, then tell me to buy again.`
       };
     }
 
     if (dryRun) {
-      return { reply: `[dry run] would swap ~${formatEthAmount(amountEth)} ETH (≈$${amountUsd}) for ${asset.symbol} from ${wallet.address}.` };
+      return { reply: `[dry run] would swap ${spend.label} (≈$${amountUsd}) for ${asset.symbol} from ${wallet.address}.` };
     }
 
     const signer = this.vault.signerFor(wallet, this.chain.provider);
-    const result = await this.dex.swapEthForToken(signer, asset.address, amountInWei);
+    const result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn);
     const meta = await this.chain.getTokenMeta(asset.address);
     const filled = Number(result.quotedOut) / 10 ** meta.decimals;
     this.logger.info(`Onchain buy: $${amountUsd} of ${asset.symbol} for author ${authorId}, tx ${result.hash}`);
@@ -157,7 +180,7 @@ export class OnchainBroker {
         const decimals = Number(item.token.decimals ?? 18);
         const amount = Number(item.value) / 10 ** decimals;
         const price = item.token.exchange_rate ? Number(item.token.exchange_rate) : null;
-        return { symbol: item.token.symbol, name: item.token.name, address: item.token.address_hash ?? item.token.address, amount, priceUsd: price, valueUsd: price ? amount * price : null };
+        return { symbol: item.token.symbol, name: item.token.name, address: item.token.address_hash ?? item.token.address, icon: item.token.icon_url ?? null, amount, priceUsd: price, valueUsd: price ? amount * price : null };
       })
       .sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
   }

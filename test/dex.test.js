@@ -26,6 +26,7 @@ test("single-hop calldata decodes back to the same swap", () => {
   const dex = makeDex();
   const route = {
     kind: "single",
+    tokenIn: ZeroAddress,
     poolKey: { currency0: ZeroAddress, currency1: TOKEN, fee: 500, tickSpacing: 10, hooks: ZeroAddress },
     zeroForOne: true,
     amountOut: 100n
@@ -70,4 +71,21 @@ test("two-hop calldata routes through USDG", () => {
   assert.equal(decoded[1].length, 2);
   assert.equal(decoded[1][0][0], DEX_ADDRESSES.usdg);
   assert.equal(decoded[1][1][0], TOKEN);
+});
+
+test("sell-direction calldata settles the token and takes ETH", () => {
+  const dex = makeDex();
+  const route = {
+    kind: "single",
+    tokenIn: TOKEN,
+    poolKey: { currency0: ZeroAddress, currency1: TOKEN, fee: 500, tickSpacing: 10, hooks: ZeroAddress },
+    zeroForOne: false,
+    amountOut: 100n
+  };
+  const { inputs } = dex.buildSwapCalldata(route, ZeroAddress, 1000n, 99n, 1n);
+  const [, params] = coder.decode(["bytes", "bytes[]"], inputs[0]);
+  const [settleCurrency] = coder.decode(["address", "uint256"], params[1]);
+  const [takeCurrency] = coder.decode(["address", "uint256"], params[2]);
+  assert.equal(settleCurrency, TOKEN);
+  assert.equal(takeCurrency, ZeroAddress);
 });

@@ -61,6 +61,10 @@ function loadOnchain() {
     maxOrderUsd,
     slippageBps,
     gasReserveEth,
+    // X hard-blocks crypto addresses in posts for 7 days after the app
+    // authenticates. Leave false until the account is old enough, then opt in
+    // to putting the deposit address directly in funding replies.
+    addressInReplies: process.env.ONCHAIN_ADDRESS_IN_REPLIES === "true",
     // The Next.js site proxies /auth and /api to this server, so the OAuth
     // redirect URI must be built from the SITE's origin, not this server's.
     siteBaseUrl: (process.env.SITE_BASE_URL ?? process.env.PUBLIC_BASE_URL ?? `http://localhost:${process.env.PORT ?? 3000}`).replace(/\/$/, ""),

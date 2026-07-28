@@ -1,5 +1,6 @@
 import { createHmac, randomBytes, createHash, timingSafeEqual } from "node:crypto";
-import { formatEther } from "ethers";
+import { formatEther, parseUnits } from "ethers";
+import { NATIVE } from "./dex.js";
 
 // HTTP surface for the portfolio site. The site never holds keys or sessions
 // itself — it proxies /api/onchain and /auth here, so the browser's cookies
@@ -24,6 +25,10 @@ export class OnchainApi {
     this.sessionSecret = onchainConfig.sessionSecret
       || (onchainConfig.walletEncKey ? createHash("sha256").update(`session:${onchainConfig.walletEncKey}`).digest("hex") : "");
     this.defaultBot = config.bots[0]?.botUsername;
+    // Cookies ride through the Vercel proxy to the site's https origin, where
+    // browsers require Secure. Derived from the site URL so local http dev
+    // still works.
+    this.secureCookies = config.onchain.siteBaseUrl.startsWith("https:");
   }
 
   oauthReady() {
@@ -41,11 +46,12 @@ export class OnchainApi {
     if (request.method === "GET" && pathname === "/auth/x/login") { await this.login(response, url); return true; }
     if (request.method === "GET" && pathname === "/auth/x/callback") { await this.callback(request, response, url); return true; }
     if (request.method === "POST" && pathname === "/auth/logout") {
-      setCookie(response, "xbot_session", "", 0);
+      setCookie(response, "xbot_session", "", 0, this.secureCookies);
       sendJson(response, 200, { ok: true });
       return true;
     }
     if (request.method === "POST" && pathname === "/api/onchain/withdraw") { await this.withdraw(request, response); return true; }
+    if (request.method === "POST" && pathname === "/api/onchain/sell") { await this.sell(request, response); return true; }
     if (request.method === "POST" && pathname === "/api/onchain/export-key") { await this.exportKey(request, response); return true; }
     return false;
   }
@@ -86,7 +92,7 @@ export class OnchainApi {
     const verifier = randomBytes(32).toString("base64url");
     const state = randomBytes(16).toString("base64url");
     const returnTo = safeReturnPath(url.searchParams.get("return"));
-    setCookie(response, "xbot_oauth", this.signValue(`${verifier}.${state}.${returnTo}`), 600);
+    setCookie(response, "xbot_oauth", this.signValue(`${verifier}.${state}.${returnTo}`), 600, this.secureCookies);
     const challenge = createHash("sha256").update(verifier).digest("base64url");
     const authorize = new URL("https://x.com/i/oauth2/authorize");
     authorize.search = new URLSearchParams({
@@ -135,8 +141,8 @@ export class OnchainApi {
     const me = (await meResponse.json()).data;
 
     const session = { authorId: String(me.id), username: me.username.toLowerCase(), exp: Date.now() + 7 * 86_400_000 };
-    setCookie(response, "xbot_oauth", "", 0);
-    setCookie(response, "xbot_session", this.signValue(Buffer.from(JSON.stringify(session)).toString("base64url")), 7 * 86_400);
+    setCookie(response, "xbot_oauth", "", 0, this.secureCookies);
+    setCookie(response, "xbot_session", this.signValue(Buffer.from(JSON.stringify(session)).toString("base64url")), 7 * 86_400, this.secureCookies);
     response.writeHead(302, { location: `${this.config.onchain.siteBaseUrl}${returnTo || `/u/${session.username}`}` });
     response.end();
   }
@@ -161,6 +167,30 @@ export class OnchainApi {
         : await this.chain.sendToken(signer, asset, to, amount);
       this.logger.info(`Withdraw by @${session.username}: ${amount} ${asset} -> ${to}, tx ${receipt.hash}`);
       sendJson(response, 200, { hash: receipt.hash });
+    } catch (error) {
+      sendJson(response, 502, { error: String(error.shortMessage ?? error.message).slice(0, 200) });
+    }
+  }
+
+  // Sells swap a token back to ETH through the same Uniswap v4 route
+  // discovery the buys use, from the signed-in owner's wallet only.
+  async sell(request, response) {
+    const session = this.session(request);
+    if (!session) return sendJson(response, 401, { error: "Sign in with X first" });
+    const wallet = await this.store.getWalletByAuthor(this.defaultBot, session.authorId);
+    if (!wallet) return sendJson(response, 404, { error: "No wallet for this account" });
+    const body = await readJson(request);
+    const token = String(body.token ?? "");
+    const amount = Number(body.amount);
+    if (!/^0x[0-9a-fA-F]{40}$/.test(token)) return sendJson(response, 400, { error: "`token` must be a 0x address" });
+    if (!Number.isFinite(amount) || amount <= 0) return sendJson(response, 400, { error: "`amount` must be positive" });
+    try {
+      const meta = await this.chain.getTokenMeta(token);
+      const amountIn = parseUnits(String(body.amount), meta.decimals);
+      const signer = this.vault.signerFor(wallet, this.chain.provider);
+      const result = await this.onchain.dex.swap(signer, token, NATIVE, amountIn);
+      this.logger.info(`Sell by @${session.username}: ${amount} ${meta.symbol} -> ETH, tx ${result.hash}`);
+      sendJson(response, 200, { hash: result.hash, receivedEthAtLeast: formatEther(result.minAmountOut) });
     } catch (error) {
       sendJson(response, 502, { error: String(error.shortMessage ?? error.message).slice(0, 200) });
     }
@@ -226,8 +256,8 @@ function cookies(request) {
   return result;
 }
 
-function setCookie(response, name, value, maxAgeSeconds) {
-  const cookie = `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+function setCookie(response, name, value, maxAgeSeconds, secure = false) {
+  const cookie = `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure ? "; Secure" : ""}`;
   const existing = response.getHeader("set-cookie");
   response.setHeader("set-cookie", existing ? [].concat(existing, cookie) : cookie);
 }

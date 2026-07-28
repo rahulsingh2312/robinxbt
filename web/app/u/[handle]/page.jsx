@@ -224,6 +224,7 @@ function ManagePanel({ portfolio, onChange }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(null);
   const [revealed, setRevealed] = useState(null);
+  const [confirmingExport, setConfirmingExport] = useState(false);
   const [sell, setSell] = useState({ token: "", amount: "" });
   const [withdrawForm, setWithdrawForm] = useState({ asset: "eth", to: "", amount: "" });
 
@@ -326,29 +327,54 @@ function ManagePanel({ portfolio, onChange }) {
         <button disabled={busy} type="submit">Withdraw</button>
       </form>
 
-      <div className="stack" style={{ gap: 8 }}>
-        <div className="row">
-          <button
-            className="danger"
-            type="button"
-            onClick={async () => {
-              if (!window.confirm("Your private key controls ALL funds in this wallet. Anyone who sees it can take everything. Reveal it now?")) return;
-              const response = await fetch("/api/onchain/export-key", { method: "POST" });
-              const payload = await response.json();
-              if (response.ok) { setRevealed(payload.privateKey); setMessage(null); }
-              else setMessage(payload.error);
-            }}
-          >
-            Export private key
-          </button>
-        </div>
+      <div className="stack" style={{ gap: 10 }}>
+        {!confirmingExport && !revealed && (
+          <div className="row">
+            <button className="danger" type="button" onClick={() => setConfirmingExport(true)}>
+              Export private key
+            </button>
+          </div>
+        )}
+        {confirmingExport && !revealed && (
+          <div className="stack" style={{ gap: 10, borderTop: "1px solid var(--line)", paddingTop: 14 }}>
+            <p className="warn-text" style={{ margin: 0 }}>
+              Your private key controls all funds in this wallet. Anyone who sees
+              it, even over your shoulder or in a screenshot, can take everything.
+            </p>
+            <div className="row">
+              <button
+                className="danger"
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const response = await fetch("/api/onchain/export-key", { method: "POST" });
+                    const payload = await response.json();
+                    if (response.ok) { setRevealed(payload.privateKey); setMessage(null); }
+                    else setMessage(payload.error);
+                    setConfirmingExport(false);
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                I understand, reveal it
+              </button>
+              <button className="quiet" type="button" onClick={() => setConfirmingExport(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
         {revealed && (
-          <>
+          <div className="stack" style={{ gap: 8 }}>
             <div className="address">{revealed}</div>
+            <div className="row">
+              <button className="quiet" type="button" onClick={() => setRevealed(null)}>Hide</button>
+            </div>
             <p className="warn-text" style={{ margin: 0 }}>
               Import it into a wallet you control, then treat this one as compromised convenience custody.
             </p>
-          </>
+          </div>
         )}
       </div>
 

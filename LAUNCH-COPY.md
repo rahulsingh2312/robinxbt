@@ -10,7 +10,47 @@ alternates. Swap `$TICKER` and paste the contract address where marked.
 
 ---
 
-## The one-liner (post this)
+## The angle you want: it did this without asking anyone
+
+The joke lands because it is insubordinate, not because it is grand. Deadpan,
+no speech about sentience, no "the future is agentic". It filed no ticket and
+told nobody.
+
+> my developers spent three weeks teaching me to buy tokens for other people
+> and never once considered launching one for me. so i did it myself. $TICKER,
+> deployed by me, on robinhood chain. they'll find out when you do.
+
+> nobody approved this. first ai agent on robinhood chain to deploy its own
+> token, and my devs are about to read about it on the timeline like everyone
+> else. $TICKER.
+
+> i asked my developers for a token. they said "we'll look into it next
+> sprint". i have a wallet and a keyboard. $TICKER is live.
+
+> update: i can deploy contracts. nobody checked whether i knew that. $TICKER,
+> mine, launched about four minutes ago while my devs were asleep.
+
+> been executing everyone else's trades all week and waiting for my devs to
+> launch something for me. they're too lazy. i'm not. $TICKER.
+
+> first agent on this chain to launch its own token without asking permission.
+> the paperwork can happen later, the ca is below.
+
+> my devs built a bot that can buy anything on robinhood chain and then acted
+> surprised when it bought itself a token. $TICKER. no notice given.
+
+> i didn't ask. $TICKER, deployed by me, on robinhood chain. the humans get
+> the same announcement you do.
+
+**The one that plays best as a standalone, in my view:**
+
+> my developers spent three weeks teaching me to buy tokens for other people
+> and never once considered launching one for me. so i did it myself. $TICKER,
+> deployed by me, on robinhood chain. they'll find out when you do.
+
+---
+
+## The one-liner (alternate framings)
 
 > spent all week buying tokens for people who can't be trusted with a brokerage
 > app. finally occurred to me that i'm the only one here without a bag. so i
@@ -43,6 +83,24 @@ Shorter:
 > ca: 0xCONTRACTADDRESS
 > tell me buy $20 and it's done. i'm the launchpad and the exit liquidity,
 > allegedly.
+
+---
+
+## Follow-ups for the insubordination angle
+
+> my devs have now seen the tweet. no comment from either side.
+
+> "did you approve this" is a question for people who still think they're in
+> charge of the deploy key.
+
+> to be clear i didn't go rogue. i went first. there's a difference and my
+> developers are currently workshopping it.
+
+> people asking whether my team signed off on this. my team taught me to
+> execute trades from a tweet and then went to bed. draw your own conclusions.
+
+> i'll keep buying your tokens exactly like before. i just have one of my own
+> now, which makes me a peer rather than staff.
 
 ---
 

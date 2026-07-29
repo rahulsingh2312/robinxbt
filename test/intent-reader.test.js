@@ -127,3 +127,19 @@ test("a sell cannot invent its asset either", async () => {
   assert.equal(intent.wantsSell, true);
   assert.notEqual(intent.term, "SOLANA");
 });
+
+test("what the person typed outranks anything in the thread", async () => {
+  // The bot's own earlier reply had mentioned solana, so with the thread as
+  // context the model answered SOLANA to a message that plainly says $VIRTUAL.
+  const reader = readerReturning({ action: "buy", asset: "SOLANA", amount_usd: 1, refers_to_context: true });
+  const intent = await reader.read("@bot i want you to buy $ 1 of $VIRTUAL", "bot", {
+    contextText: "dropping a contract address like that and the token's on solana with $842M FDV"
+  });
+  assert.equal(intent.term, "VIRTUAL");
+});
+
+test("context still answers a message that names nothing", async () => {
+  const reader = readerReturning({ action: "buy", asset: "CASHCAT", amount_usd: 10, refers_to_context: true });
+  const intent = await reader.read("@bot buy it, $10", "bot", { contextText: "cashcat looks ready here" });
+  assert.equal(intent.term, "CASHCAT");
+});

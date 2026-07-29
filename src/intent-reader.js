@@ -44,8 +44,8 @@ const COMPANY_TICKERS = new Map(Object.entries({
 }));
 
 export class IntentReader {
-  groundTerm(term, text, contextText, refersToContext) {
-    return groundTermImpl(term, text, contextText, refersToContext, this.logger);
+  groundTerm(term, text, contextText, refersToContext, fallbackTerm = null) {
+    return groundTermImpl(term, text, contextText, refersToContext, fallbackTerm);
   }
 
   constructor({ llm = null, logger = console, timeoutMs = 12_000 } = {}) {
@@ -96,7 +96,7 @@ export class IntentReader {
         wantsBuy: false,
         // Held to the same standard as a buy: the model may not name an asset
         // that appears nowhere in what was actually said.
-        term: this.groundTerm(normalizeTerm(parsed.asset), text, contextText, parsed.refers_to_context) ?? fallback?.term ?? null,
+        term: this.groundTerm(normalizeTerm(parsed.asset), text, contextText, parsed.refers_to_context, fallback?.term) ?? fallback?.term ?? null,
         amountUsd: Number.isFinite(Number(parsed.amount_usd)) && Number(parsed.amount_usd) > 0 ? Number(parsed.amount_usd) : null,
         portion: Number.isFinite(portion) && portion > 0 && portion <= 1 ? portion : 1
       };
@@ -125,7 +125,7 @@ export class IntentReader {
     // check — it only widens where the asset may come from. Asked to buy
     // $VIRTUAL, the model once answered SOLANA and set this flag, and the
     // flag alone let it through.
-    const grounded = this.groundTerm(term, text, contextText, parsed.refers_to_context);
+    const grounded = this.groundTerm(term, text, contextText, parsed.refers_to_context, fallback?.term);
     if (term && !grounded) {
       if (namedCompany) return { wantsBuy: action === "buy", amountUsd, term: namedCompany };
       this.logger.warn(`Intent model proposed "${term}" which is absent from the message; ignoring it`);
@@ -143,12 +143,23 @@ export class IntentReader {
 // Returns the term only when the conversation actually supports it. The
 // model's "it came from the context" claim widens where we look; it never
 // removes the requirement.
-function groundTermImpl(term, text, contextText, refersToContext, logger) {
+function groundTermImpl(term, text, contextText, refersToContext, fallbackTerm = null) {
   if (!term) return null;
-  const sources = refersToContext ? `${text}\n${contextText ?? ""}` : text;
-  if (mentions(sources, term) || derivedFrom(sources, term)) return term;
-  const named = companyTickerIn(sources);
-  return named === term ? term : null;
+  // What the person actually typed wins over anything read out of the thread.
+  // A reply chain accumulates tickers — including ones the bot itself got
+  // wrong earlier — and letting context outrank the message meant asking for
+  // $VIRTUAL and being told SOLANA could not be found, because "solana"
+  // appeared in the bot's own previous reply.
+  if (mentions(text, term) || derivedFrom(text, term)) return term;
+  // A company named in the message vouches for its own ticker before any
+  // pattern guess does: "apple" means AAPL, not the word APPLE.
+  const namedInText = companyTickerIn(text);
+  if (namedInText) return namedInText;
+  if (fallbackTerm) return fallbackTerm;
+  if (!refersToContext || !contextText) return null;
+  const fromContext = `${text}\n${contextText}`;
+  if (mentions(fromContext, term) || derivedFrom(fromContext, term)) return term;
+  return companyTickerIn(fromContext) === term ? term : null;
 }
 
 // Tickers, names, and addresses all arrive as free text; normalize to what the

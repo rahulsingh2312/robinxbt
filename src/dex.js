@@ -89,23 +89,14 @@ export class Dex {
   // each fee tier plus two-hop through the hub currencies (ETH, USDG) — and
   // keeps whichever quotes the most output. No live pool yields null, which
   // callers turn into an honest "no market" answer instead of a revert.
+  // Direct pools only. Multi-hop paths were quoting nonsense and reverting on
+  // execution, and a swap that cannot be trusted to price itself has no
+  // business moving someone's money; callers hop through ETH explicitly
+  // instead, one proven single-hop swap at a time.
   async findBestRoute(tokenIn, tokenOut, amountInWei) {
-    const attempts = [];
-    for (const [fee, tickSpacing] of FEE_TIERS) {
-      attempts.push(this.quoteSingle(tokenIn, tokenOut, fee, tickSpacing, amountInWei).catch(() => null));
-    }
-    const hubs = [NATIVE, this.addresses.usdg].filter((hub) => !sameAddress(hub, tokenIn) && !sameAddress(hub, tokenOut));
-    for (const hub of hubs) {
-      for (const [fee1, tick1] of FEE_TIERS) {
-        for (const [fee2, tick2] of FEE_TIERS) {
-          const path = [
-            { intermediateCurrency: hub, fee: fee1, tickSpacing: tick1, hooks: ZeroAddress, hookData: "0x" },
-            { intermediateCurrency: tokenOut, fee: fee2, tickSpacing: tick2, hooks: ZeroAddress, hookData: "0x" }
-          ];
-          attempts.push(this.quotePath(tokenIn, path, amountInWei).catch(() => null));
-        }
-      }
-    }
+    const attempts = FEE_TIERS.map(([fee, tickSpacing]) =>
+      this.quoteSingle(tokenIn, tokenOut, fee, tickSpacing, amountInWei).catch(() => null)
+    );
     const routes = (await Promise.all(attempts)).filter(Boolean).filter((route) => route.amountOut > 0n);
     if (routes.length === 0) return null;
     return routes.reduce((best, route) => (route.amountOut > best.amountOut ? route : best));

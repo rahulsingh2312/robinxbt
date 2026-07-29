@@ -199,11 +199,20 @@ export class OnchainBroker {
     // ETH, so a sliver stays reserved.
     const wantWei = usdToWei(amountUsd, ethUsd);
     const usdgUnits = BigInt(Math.round(amountUsd * 10 ** usdgDecimals));
+    // USDG only pays directly when a USDG pool for this token exists. Most
+    // memecoins are quoted in ETH, so otherwise the dollars are converted to
+    // ETH first and the buy happens from there.
+    const usdgDirect = usdgBalance >= usdgUnits
+      ? await this.dex.findBestRoute(usdgAddress, asset.address, usdgUnits).catch(() => null)
+      : null;
+
     let spend = null;
-    if (usdgBalance >= usdgUnits && ethBalance >= gasReserve) {
+    if (usdgDirect && ethBalance >= gasReserve) {
       spend = { tokenIn: usdgAddress, amountIn: usdgUnits, label: `$${amountUsd} USDG` };
     } else if (ethBalance >= wantWei + gasReserve) {
       spend = { tokenIn: NATIVE, amountIn: wantWei, label: `~${formatEthAmount(amountEth)} ETH` };
+    } else if (usdgBalance >= usdgUnits && ethBalance >= gasReserve) {
+      spend = { tokenIn: usdgAddress, amountIn: usdgUnits, viaEth: true, label: `$${amountUsd} USDG` };
     }
 
     // Dollars present but nothing to pay the network with: a precise ask
@@ -300,7 +309,20 @@ export class OnchainBroker {
     }
 
     const signer = this.vault.signerFor(wallet, this.chain.provider);
-    const result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn, { route, slippageBps });
+    // No direct USDG pool: sell the dollars for ETH first, then buy with what
+    // that produced. Two proven single-hop swaps beat one exotic route.
+    let result;
+    if (spend.viaEth) {
+      const toEth = await this.dex.swap(signer, usdgAddress, NATIVE, spend.amountIn, { slippageBps: this.config.maxSlippageBps });
+      const funded = await this.chain.getEthBalance(wallet.address, { fresh: true });
+      const buyWei = funded > gasReserve ? funded - gasReserve : 0n;
+      if (buyWei <= 0n) {
+        return { reply: `Converted your USDG to ETH but there's nothing left for gas. Send a little ETH and I'll finish the buy.`, txHash: toEth.hash };
+      }
+      result = await this.dex.swap(signer, NATIVE, asset.address, buyWei, { slippageBps });
+    } else {
+      result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn, { route, slippageBps });
+    }
     const filled = Number(result.quotedOut) / 10 ** meta.decimals;
     this.logger.info(`Onchain buy: $${amountUsd} of ${asset.symbol} for author ${authorId}, tx ${result.hash}`);
     const provenance = borrowed && !asset.official ? ` (${asset.symbol} came from that tweet, not from me)` : "";

@@ -89,3 +89,18 @@ test("sell-direction calldata settles the token and takes ETH", () => {
   assert.equal(settleCurrency, TOKEN);
   assert.equal(takeCurrency, ZeroAddress);
 });
+
+test("route discovery only proposes direct pools", async () => {
+  // Multi-hop paths quoted nonsense and reverted on execution. A route that
+  // cannot price itself must never reach a signer, so they are gone; callers
+  // hop through ETH explicitly with two proven single-hop swaps.
+  const quoted = [];
+  const dex = makeDex();
+  dex.quoterContract = {
+    quoteExactInputSingle: { staticCall: async ({ poolKey }) => { quoted.push("single"); return [1000n, 0n]; } },
+    quoteExactInput: { staticCall: async () => { quoted.push("path"); return [1000n, 0n]; } }
+  };
+  await dex.findBestRoute(TOKEN, DEX_ADDRESSES.usdg, 1000n);
+  assert.ok(quoted.length > 0);
+  assert.ok(!quoted.includes("path"), "multi-hop quoting should not happen");
+});

@@ -63,3 +63,43 @@ test("an unverified ticker returns candidates for on-chain vetting", async () =>
   assert.equal(result.candidates.length, 2);
   assert.ok(result.candidates.every((candidate) => candidate.address));
 });
+
+test("a token the explorer never priced is still found through pair liquidity", async () => {
+  // The explorer only knows tokens it has priced, so anything launched
+  // recently looked non-existent. The pair index knows it the moment it has
+  // a pool, which is the thing that actually matters for buying.
+  const resolver = new AssetResolver({
+    logger: { warn() {} },
+    fetchImpl: async (url) => {
+      if (String(url).includes("dexscreener")) {
+        return { ok: true, json: async () => ({ pairs: [
+          { chainId: "robinhood", baseToken: { symbol: "IN", name: "INSIDERS.BOT", address: "0x6F572E8020247324D7B9dc15c297a32e4187dF1C" }, liquidity: { usd: 67497 }, priceUsd: "0.0002368" },
+          { chainId: "base", baseToken: { symbol: "IN", name: "Other chain", address: "0xdead" }, liquidity: { usd: 999999 }, priceUsd: "1" }
+        ] }) };
+      }
+      return { ok: true, json: async () => ({ items: [] }) };
+    }
+  });
+  const result = await resolver.resolve("IN");
+  assert.equal(result.unverified, true);
+  // Only this chain's pairs count, however deep another chain's are.
+  assert.equal(result.candidates.length, 1);
+  assert.equal(result.candidates[0].address, "0x6F572E8020247324D7B9dc15c297a32e4187dF1C");
+});
+
+test("an issuer-verified token still beats a deep memecoin pool", async () => {
+  const resolver = new AssetResolver({
+    logger: { warn() {} },
+    fetchImpl: async (url) => {
+      if (String(url).includes("dexscreener")) {
+        return { ok: true, json: async () => ({ pairs: [
+          { chainId: "robinhood", baseToken: { symbol: "NVDA", name: "fake", address: "0xfake" }, liquidity: { usd: 9_000_000 }, priceUsd: "1" }
+        ] }) };
+      }
+      return { ok: true, json: async () => ({ items: [REAL] }) };
+    }
+  });
+  const result = await resolver.resolve("NVDA");
+  assert.equal(result.official, true);
+  assert.equal(result.address, REAL.address_hash);
+});

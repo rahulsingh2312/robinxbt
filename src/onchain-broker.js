@@ -61,6 +61,10 @@ export function parseBuyIntent(text, botUsername) {
     }
   }
 
+  // A bare contract address is almost always someone answering "reply with
+  // the contract address". It carries no verb and no amount, but it is a
+  // direct answer and must reach the pending-buy flow rather than the model.
+  if (!wantsBuy && address) return { wantsBuy: false, amountUsd, term: address };
   if (!wantsBuy && amountUsd === null) return null;
   if (!wantsBuy && term) return null; // a bare "$50" reply is an amount, not an order for token "50"
   return { wantsBuy, amountUsd, term };
@@ -140,6 +144,9 @@ export class OnchainBroker {
   async executeBuy({ botUsername, authorId, username, intent, parentText, contextFromBot = false, pendingBuy, dryRun }) {
     const wallet = await this.ensureWallet(botUsername, authorId, username);
 
+    // Whichever half the pending record holds fills in for the half missing
+    // from this message: an address answering "which token", or a size
+    // answering "how much".
     const ownTerm = intent.term ?? pendingBuy?.term ?? null;
     const contextTerm = ownTerm ? null : extractAssetTerms(parentText ?? "")[0] ?? null;
     const term = ownTerm ?? contextTerm;
@@ -182,7 +189,13 @@ export class OnchainBroker {
       asset = vetted;
     }
     if (!asset) {
-      return { reply: `Couldn’t find ${term} on Robinhood Chain. If it’s a memecoin, reply with its contract address.` };
+      // Hold the size against our own reply, so a bare contract address in
+      // response finishes the order instead of starting a new conversation.
+      const pendingSize = intent.amountUsd ?? pendingBuy?.amountUsd ?? null;
+      return {
+        reply: `Couldn’t find ${term} on Robinhood Chain. Reply with its contract address and I’ll buy that exact token.`,
+        ...(pendingSize ? { pendingBuy: { authorId: String(authorId), amountUsd: pendingSize } } : {})
+      };
     }
 
     // Probe for a live market BEFORE any funding ask: a token that resolves

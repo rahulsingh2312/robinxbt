@@ -8,9 +8,11 @@ const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 // memecoins, the one with real market data may win; an ambiguous term fails
 // closed and the bot says so instead of buying a scam.
 export class AssetResolver {
-  constructor({ baseUrl = "https://robinhoodchain.blockscout.com", fetchImpl = fetch } = {}) {
+  constructor({ baseUrl = "https://robinhoodchain.blockscout.com", dexScreenerUrl = "https://api.dexscreener.com", fetchImpl = fetch, logger = console } = {}) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.dexScreenerUrl = dexScreenerUrl.replace(/\/$/, "");
     this.fetch = fetchImpl;
+    this.logger = logger;
     this.cache = new Map();
   }
 
@@ -42,6 +44,63 @@ export class AssetResolver {
   }
 
   async search(term) {
+    // The explorer only knows tokens it has priced, which leaves out anything
+    // launched recently — exactly what people ask for. The pair indexers know
+    // a token the moment it has liquidity, so they are asked in parallel and
+    // whichever finds a real market wins.
+    const [fromExplorer, fromPairs] = await Promise.all([
+      this.searchExplorer(term).catch(() => null),
+      this.searchPairs(term).catch((error) => {
+        this.logger.warn?.(`Pair index lookup failed for ${term}: ${error.message}`);
+        return null;
+      })
+    ]);
+    // An issuer-verified stock token always wins; otherwise the deepest real
+    // pool does, because liquidity is the thing that has to be paid for.
+    if (fromExplorer?.official) return fromExplorer;
+    if (fromPairs) return fromPairs;
+    return fromExplorer;
+  }
+
+  // Tokens ranked by the liquidity actually backing their pairs on this chain.
+  async searchPairs(term) {
+    const response = await this.fetch(`${this.dexScreenerUrl}/latest/dex/search?q=${encodeURIComponent(term)}`, {
+      signal: AbortSignal.timeout(6_000)
+    });
+    if (!response.ok) return null;
+    const body = await response.json();
+    const matches = (body.pairs ?? [])
+      .filter((pair) => String(pair.chainId ?? "").toLowerCase().includes("robinhood"))
+      .filter((pair) => String(pair.baseToken?.symbol ?? "").toUpperCase() === term)
+      .filter((pair) => Number(pair.liquidity?.usd ?? 0) > 0);
+    if (matches.length === 0) return null;
+
+    // One token can have several pairs; sum their liquidity and keep the token
+    // with the deepest total, which is the one a buy should route into.
+    const byToken = new Map();
+    for (const pair of matches) {
+      const address = pair.baseToken.address;
+      const entry = byToken.get(address) ?? { address, symbol: pair.baseToken.symbol, name: pair.baseToken.name ?? "", liquidityUsd: 0, priceUsd: null };
+      entry.liquidityUsd += Number(pair.liquidity.usd);
+      entry.priceUsd ??= pair.priceUsd ? Number(pair.priceUsd) : null;
+      byToken.set(address, entry);
+    }
+    const ranked = [...byToken.values()].sort((a, b) => b.liquidityUsd - a.liquidityUsd);
+    const candidates = ranked.slice(0, 4).map((entry) => ({
+      address: entry.address,
+      symbol: entry.symbol,
+      name: entry.name,
+      official: false,
+      priceUsd: entry.priceUsd,
+      liquidityUsd: entry.liquidityUsd,
+      via: "pairs"
+    }));
+    // A single clearly-deepest pool is not ambiguous; several comparable ones
+    // still go to the liquidity vetting downstream.
+    return { unverified: true, symbol: term, candidates };
+  }
+
+  async searchExplorer(term) {
     const response = await this.fetch(`${this.baseUrl}/api/v2/search?q=${encodeURIComponent(term)}`);
     if (!response.ok) return null;
     const body = await response.json();

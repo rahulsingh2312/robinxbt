@@ -269,7 +269,12 @@ export class MentionWorker {
     // A bare "$50" only means something as an answer to our own "how much?"
     // ask, which the pending record proves.
     const pending = await this.pendingBuyFor(post);
-    if (pending && String(post.author_id) === pending.authorId && (intent?.amountUsd ?? null) !== null) {
+    // A pending ask is answered either by a size ("$50") or by the contract
+    // address the bot asked for. Both are direct answers to our own question.
+    const answersPending = pending
+      && String(post.author_id) === pending.authorId
+      && ((intent?.amountUsd ?? null) !== null || /^0x[0-9a-fA-F]{40}$/.test(String(intent?.term ?? "")));
+    if (answersPending) {
       return this.runOnchainBuy({ intent: intent ?? { wantsBuy: false, amountUsd: null, term: null }, pendingBuy: pending, post, username });
     }
     if (intent?.wantsBuy) {

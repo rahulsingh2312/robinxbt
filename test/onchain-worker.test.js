@@ -161,3 +161,28 @@ test("a reply X refuses for containing an address is re-sent without it", async 
   assert.doesNotMatch(attempts[1], /0x[0-9a-fA-F]{40}/);
   assert.match(attempts[1], /portfolio page/);
 });
+
+test("a bare contract address answers the bot's own request for one", async () => {
+  const { worker, store, calls } = makeWorker();
+  await store.load();
+  // The bot asked "reply with its contract address" and remembered the size.
+  await store.savePendingBuy("mybot", "800", { authorId: "42", amountUsd: 1.1 });
+  await worker.handleMention({
+    id: "960", author_id: "42", username: "alice",
+    text: "0x6F572E8020247324D7B9dc15c297a32e4187dF1C",
+    referenced_tweets: [{ type: "replied_to", id: "800" }]
+  });
+  assert.equal(calls.buys.length, 1, "the address should complete the buy, not reach the model");
+  assert.equal(calls.buys[0].intent.term, "0x6F572E8020247324D7B9dc15c297a32e4187dF1C");
+  assert.equal(calls.buys[0].pendingBuy.amountUsd, 1.1);
+});
+
+test("a bare address with no pending question is not an order", async () => {
+  const { worker, store, calls } = makeWorker();
+  await store.load();
+  await worker.handleMention({
+    id: "961", author_id: "42", username: "alice",
+    text: "0x6F572E8020247324D7B9dc15c297a32e4187dF1C"
+  });
+  assert.equal(calls.buys.length, 0);
+});

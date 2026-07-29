@@ -13,13 +13,16 @@ import { parseBuyIntent, parseUsdAmount } from "./onchain-broker.js";
 const SYSTEM_PROMPT = `You read one message sent to a trading bot and report what the sender wants. You never give advice and never write prose.
 
 Return ONLY a JSON object with these keys:
-- "action": "buy" if they are telling the bot to purchase something now, "sell" if telling it to sell, "amount_only" if they are just stating a dollar amount (usually answering "how much?"), otherwise "none".
+- "action": "buy" to purchase now, "sell" to sell a holding now, "portfolio" if they are asking what they hold or what it is worth, "amount_only" if they are just stating a dollar amount (usually answering "how much?"), otherwise "none".
 - "asset": the tradable symbol. If they name a company, return its stock ticker ("tesla" -> "TSLA", "apple" -> "AAPL", "nvidia" -> "NVDA", "google" -> "GOOG"). If they name a coin, return it as written without spaces ("cash cat" -> "CASHCAT"). A 0x contract address is returned unchanged. Use null if they did not name anything to trade.
 - "amount_usd": the dollar amount as a number, converting words ("a buck fifty" -> 1.5, "twenty bucks" -> 20, "half a dollar" -> 0.5). Use null if no amount is stated.
 - "refers_to_context": true if the asset is only identifiable from the conversation (they said "it", "that coin", "the one you mentioned").
+- "portion": for a sell, how much of the holding: 1 for all of it (the default when they just say "sell my X"), 0.5 for half, 0.25 for a quarter. Use null if they gave a dollar amount instead.
 
 Rules:
 - Questions are not orders. "should i buy nvda?" and "would you buy $50 of nvda?" are both "none".
+- "sell my pepe", "dump my nvda", "cash out my cashcat" are all "sell" with portion 1.
+- "what do i have", "show me my portfolio", "hows my bag", "what am i holding" are all "portfolio".
 - Hypotheticals, jokes, and figures of speech are "none". "grab a coffee, that'll be $5" is "none".
 - A currency word is never the asset. In "1.5 dollar of cashcat" the asset is "cashcat".
 - Never invent an asset the sender did not mention. Drop trailing words like "stock", "coin", or "token" from the symbol.
@@ -81,7 +84,17 @@ export class IntentReader {
   // that the message itself does not support is dropped.
   reconcile(parsed, fallback, text) {
     const action = String(parsed.action ?? "none").toLowerCase();
-    if (action === "sell") return { wantsBuy: false, amountUsd: null, term: null, wantsSell: true };
+    if (action === "portfolio") return { wantsPortfolio: true, wantsBuy: false, amountUsd: null, term: null };
+    if (action === "sell") {
+      const portion = Number(parsed.portion);
+      return {
+        wantsSell: true,
+        wantsBuy: false,
+        term: normalizeTerm(parsed.asset) ?? companyTickerIn(text),
+        amountUsd: Number.isFinite(Number(parsed.amount_usd)) && Number(parsed.amount_usd) > 0 ? Number(parsed.amount_usd) : null,
+        portion: Number.isFinite(portion) && portion > 0 && portion <= 1 ? portion : 1
+      };
+    }
     if (action !== "buy" && action !== "amount_only") return null;
 
     let amountUsd = Number(parsed.amount_usd);

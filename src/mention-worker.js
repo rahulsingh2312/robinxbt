@@ -261,8 +261,26 @@ export class MentionWorker {
       if (/\?/.test(text) && intent.amountUsd === null) return undefined;
       return this.runOnchainBuy({ intent, post, username });
     }
-    if (intent?.wantsSell || (/\bsell\b/i.test(text) && !/\?/.test(text))) {
-      return `Selling and withdrawals live on your portfolio page, link in bio. Sign in with X there and it takes one tap.`;
+    if (intent?.wantsPortfolio) {
+      return this.onchain.describePortfolio(this.bot.botUsername, post.author_id, username);
+    }
+    if (intent?.wantsSell) {
+      // Selling moves money exactly like buying does, so it takes the same
+      // exactly-once claim: a retried mention must not sell twice.
+      if (post.id && !(await this.store.claimOrder(this.bot.botUsername, post.id))) return null;
+      try {
+        const result = await this.onchain.handleSell({
+          botUsername: this.bot.botUsername,
+          authorId: post.author_id,
+          username,
+          intent,
+          dryRun: this.bot.dryRun
+        });
+        return fitForPost(result.reply);
+      } catch (error) {
+        this.logger.error(`Onchain sell failed for post ${post.id}`, error);
+        return `Couldn't sell that: ${friendlyChainError(error)}`;
+      }
     }
     return undefined;
   }

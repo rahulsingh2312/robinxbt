@@ -17,6 +17,26 @@ export function parseBuyIntent(text, botUsername) {
   // A question is a question, never an order: "would you buy $50 of NVDA?"
   // used to execute because it carried an amount.
   if (command.includes("?")) return null;
+
+  // Sells and portfolio checks are recognized here too, so the bot keeps
+  // working when the model is unavailable.
+  if (/\b(sell|dump|cash out|liquidate|unload)\b/i.test(command)) {
+    const sellTerm = command.match(/\b(0x[0-9a-fA-F]{40})\b/)?.[1]
+      ?? command.match(/\b(?:sell|dump|cash out|liquidate|unload)\b(?:\s+(?:all|half|some|my|of|the))*\s+\$?([A-Za-z][A-Za-z0-9]{0,14})\b/i)?.[1]
+      // "cash out $5 of WOJ": the asset trails the amount, not the verb.
+      ?? command.match(/\bof\s+\$?([A-Za-z][A-Za-z0-9]{0,14})\b/i)?.[1]
+      ?? null;
+    return {
+      wantsSell: true,
+      wantsBuy: false,
+      term: sellTerm && !FILLER.test(sellTerm) ? sellTerm.toUpperCase() : null,
+      amountUsd: parseUsdAmount(command.replace(/\b0x[0-9a-fA-F]{40}\b/g, " ")),
+      portion: /\bhalf\b/i.test(command) ? 0.5 : /\bquarter\b/i.test(command) ? 0.25 : 1
+    };
+  }
+  if (/\b(portfolio|holdings|my bag|what do i (?:have|own|hold)|what am i holding)\b/i.test(command)) {
+    return { wantsPortfolio: true, wantsBuy: false, amountUsd: null, term: null };
+  }
   // Only unambiguous imperatives move money. "grab a coffee, that will be $5"
   // and "get me out of here for $10" both used to fill.
   const wantsBuy = /\b(buy|ape into|aping into)\b/i.test(command);
@@ -373,20 +393,116 @@ export class OnchainBroker {
     };
   }
 
-  // What "portfolio" answers when on-chain mode is live: the user's real
-  // holdings, priced by the explorer, no URL in the reply (links cost 13x).
+  // What "portfolio" answers when on-chain mode is live: the real holdings,
+  // laid out as a readable statement rather than a run-on sentence. No URL and
+  // no address fragments: X charges 13x for a link and blocks crypto addresses.
   async describePortfolio(botUsername, authorId, username) {
     const wallet = await this.ensureWallet(botUsername, authorId, username);
-    const eth = await this.chain.getEthBalance(wallet.address);
-    const holdings = await this.fetchHoldings(wallet.address);
-    const parts = [`${formatEthAmount(Number(formatEther(eth)))} ETH`];
-    for (const holding of holdings.slice(0, 3)) {
-      parts.push(`${formatQty(holding.amount)} ${holding.symbol}${holding.valueUsd ? ` ($${Math.round(holding.valueUsd)})` : ""}`);
+    const [eth, holdings, ethUsd] = await Promise.all([
+      this.chain.getEthBalance(wallet.address),
+      this.fetchHoldings(wallet.address),
+      this.dex.ethUsdPrice().catch(() => null)
+    ]);
+    const ethAmount = Number(formatEther(eth));
+    const ethValue = ethUsd ? ethAmount * ethUsd : null;
+
+    const rows = holdings.map((holding) => ({
+      symbol: holding.symbol,
+      amount: holding.amount,
+      valueUsd: holding.valueUsd
+    }));
+    if (ethAmount > 0) rows.push({ symbol: "ETH", amount: ethAmount, valueUsd: ethValue });
+
+    if (rows.length === 0) {
+      return `Nothing in your wallet yet. Fund it from your portfolio page, link in bio, then tell me what to buy.`;
     }
-    const more = holdings.length > 3 ? ` +${holdings.length - 3} more` : "";
-    // No address fragments here either — X's crypto-address filter is the
-    // reason the funding reply already points at the site.
-    return `Your wallet: ${parts.join(", ")}${more}. Full view, deposit address, and controls at the portfolio link in bio.`;
+
+    const total = rows.reduce((sum, row) => sum + (row.valueUsd ?? 0), 0);
+    // A tweet is 280 characters, so the biggest positions are named and the
+    // tail is counted rather than truncated mid-list.
+    const ranked = rows.sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
+    const shown = ranked.slice(0, 4);
+    const lines = shown.map((row) => `${row.symbol} ${formatCompact(row.amount)}${row.valueUsd ? ` · $${formatMoney(row.valueUsd)}` : ""}`);
+    const rest = ranked.length - shown.length;
+    if (rest > 0) lines.push(`+${rest} more`);
+    return `Your bag: $${formatMoney(total)}\n${lines.join("\n")}\nManage it at the portfolio link in bio.`;
+  }
+
+  // Sells a holding back to ETH. The same wallet lock, the same route
+  // discovery, the same slippage sizing as a buy: this is a buy in reverse.
+  async handleSell(request) {
+    return this.withWalletLock(request.authorId, () => this.executeSell(request));
+  }
+
+  async executeSell({ botUsername, authorId, username, intent, dryRun }) {
+    const wallet = await this.ensureWallet(botUsername, authorId, username);
+    const holdings = await this.fetchHoldings(wallet.address);
+    if (holdings.length === 0) {
+      return { reply: `You don't hold anything I can sell. Check the portfolio link in bio.` };
+    }
+
+    // Match by ticker or by address, whichever they gave.
+    const term = String(intent.term ?? "").trim();
+    const holding = term
+      ? holdings.find((item) =>
+          item.symbol.toUpperCase() === term.replace(/^\$/, "").toUpperCase() ||
+          item.address.toLowerCase() === term.toLowerCase())
+      : holdings[0];
+    if (!holding) {
+      return { reply: `You're not holding any ${term}. You have ${holdings.slice(0, 3).map((item) => item.symbol).join(", ")}.` };
+    }
+
+    const meta = await this.chain.getTokenMeta(holding.address);
+    const balance = (await this.chain.getTokenBalance(holding.address, wallet.address)).raw;
+    // A dollar figure is converted through the token's own price; otherwise
+    // the portion applies, defaulting to the whole position.
+    let amountIn = balance;
+    if (intent.amountUsd && holding.priceUsd) {
+      const tokens = intent.amountUsd / holding.priceUsd;
+      amountIn = BigInt(Math.floor(tokens * 10 ** meta.decimals));
+      if (amountIn > balance) amountIn = balance;
+    } else if (intent.portion && intent.portion < 1) {
+      amountIn = (balance * BigInt(Math.round(intent.portion * 1000))) / 1000n;
+    }
+    if (amountIn <= 0n) {
+      return { reply: `That works out to zero ${holding.symbol}. Tell me a bigger slice.` };
+    }
+
+    const gasReserve = parseEther(String(this.config.gasReserveEth));
+    if ((await this.chain.getEthBalance(wallet.address)) < gasReserve) {
+      return { reply: `Selling costs gas and your wallet has none. Send a little ETH on Robinhood Chain, then ask again.` };
+    }
+
+    // Sell into whichever quote currency this token actually trades against.
+    const usdgAddress = this.dex.addresses.usdg;
+    const [toEth, toUsdg] = await Promise.all([
+      this.dex.findBestRoute(holding.address, NATIVE, amountIn).catch(() => null),
+      this.dex.findBestRoute(holding.address, usdgAddress, amountIn).catch(() => null)
+    ]);
+    const route = toEth && (!toUsdg || toEth.amountOut > 0n) ? toEth : toUsdg;
+    const proceedsIn = route === toEth ? NATIVE : usdgAddress;
+    if (!route) {
+      return { reply: `No one is buying ${holding.symbol} through the pools I can reach right now, so I can't sell it.` };
+    }
+
+    const sold = Number(amountIn) / 10 ** meta.decimals;
+    if (dryRun) {
+      return { reply: `[dry run] would sell ${formatCompact(sold)} ${holding.symbol} from ${wallet.address}.` };
+    }
+
+    const signer = this.vault.signerFor(wallet, this.chain.provider);
+    const result = await this.dex.swap(signer, holding.address, proceedsIn, amountIn, {
+      route,
+      slippageBps: this.config.maxSlippageBps
+    });
+    const proceeds = proceedsIn === NATIVE
+      ? `${formatEthAmount(Number(formatEther(result.quotedOut)))} ETH`
+      : `$${formatMoney(Number(result.quotedOut) / 10 ** (await this.dex.usdgDecimals()))} USDG`;
+    this.logger.info(`Onchain sell: ${sold} ${holding.symbol} for author ${authorId}, tx ${result.hash}`);
+    return {
+      reply: `Sold ${formatCompact(sold)} ${holding.symbol} for ${proceeds}. It's back in your wallet, check the portfolio link in bio.`,
+      txHash: result.hash
+    };
   }
 
   // Ranks same-ticker candidates by what the chain says rather than what the
@@ -492,6 +608,26 @@ function usdToWei(amountUsd, ethUsd) {
 
 function formatEthAmount(value) {
   return Number(value.toFixed(5)).toString();
+}
+
+// Token counts run from 0.00004 to 40 billion, so the unit does the work
+// rather than a wall of digits: 62.4K, 1.2M, 3.4B.
+function formatCompact(value) {
+  const magnitude = Math.abs(value);
+  if (magnitude >= 1e9) return `${trim(value / 1e9)}B`;
+  if (magnitude >= 1e6) return `${trim(value / 1e6)}M`;
+  if (magnitude >= 1e3) return `${trim(value / 1e3)}K`;
+  if (magnitude >= 1) return trim(value);
+  return new Intl.NumberFormat("en-US", { maximumSignificantDigits: 3 }).format(value);
+}
+
+function trim(value) {
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: value >= 100 ? 0 : value >= 10 ? 1 : 2 }).format(value);
+}
+
+function formatMoney(value) {
+  if (value >= 1000) return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(value);
 }
 
 function formatQty(value) {

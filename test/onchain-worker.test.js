@@ -9,7 +9,7 @@ import { Store } from "../src/store.js";
 // Routing-level checks: WHAT reaches the on-chain broker, not what it does.
 function makeWorker({ handleBuyResult = { reply: "ok" } } = {}) {
   const store = new Store(path.join(mkdtempSync(path.join(tmpdir(), "worker-test-")), "store.json"));
-  const calls = { ensure: [], buys: [], portfolio: [] };
+  const calls = { ensure: [], buys: [], portfolio: [], sells: [] };
   const onchain = {
     ensureWallet: async (...args) => { calls.ensure.push(args); return { address: "0x" + "1".repeat(40), created: true }; },
     handleBuy: async (args) => { calls.buys.push(args); return handleBuyResult; },
@@ -114,9 +114,28 @@ test("portfolio goes to the on-chain view when wallets are live", async () => {
   assert.equal(calls.portfolio.length, 1);
 });
 
-test("sell requests are pointed at the site", async () => {
-  const { worker, store } = makeWorker();
+test("sell requests are executed, not deflected to the site", async () => {
+  const { worker, store, calls } = makeWorker();
   await store.load();
-  const reply = await worker.commandReply("@mybot sell my NVDA", "alice", { id: "908", author_id: "42", text: "@mybot sell my NVDA" });
-  assert.match(reply, /link in bio/);
+  worker.onchain.handleSell = async (args) => { calls.sells.push(args); return { reply: "Sold 1K PEPE for 0.001 ETH." }; };
+  const reply = await worker.commandReply("@mybot sell my PEPE", "alice", { id: "908", author_id: "42", text: "@mybot sell my PEPE" });
+  assert.equal(calls.sells.length, 1);
+  assert.match(reply, /Sold/);
+});
+
+test("a sell cannot be executed twice from a retried mention", async () => {
+  const { worker, store, calls } = makeWorker();
+  await store.load();
+  worker.onchain.handleSell = async (args) => { calls.sells.push(args); return { reply: "Sold." }; };
+  const post = { id: "909", author_id: "42", username: "alice", text: "@mybot sell my PEPE" };
+  await worker.handleMention(post);
+  await worker.handleMention({ ...post });
+  assert.equal(calls.sells.length, 1);
+});
+
+test("asking what you hold returns the portfolio", async () => {
+  const { worker, store, calls } = makeWorker();
+  await store.load();
+  await worker.handleMention({ id: "910", author_id: "42", username: "alice", text: "@mybot show me my portfolio" });
+  assert.equal(calls.portfolio.length, 1);
 });

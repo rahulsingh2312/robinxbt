@@ -12,6 +12,13 @@ const BUYS = [
   ["buy it, $10", "Replying under a tweet? It reads the tweet above for what “it” means."]
 ];
 
+const SELLS = [
+  ["sell my PEPE", "Sells the whole position back to ETH, straight from the tweet."],
+  ["dump half my NVDA", "Half, a quarter, or all of it. Say which."],
+  ["cash out $5 of cashcat", "Or name a dollar figure and it sells just that much."],
+  ["show me my portfolio", "Lists what you hold, what it's worth, and the total."]
+];
+
 const ASKS = [
   ["buy me some NVDA", "No amount, so it asks how much. Reply “$5” and it fills."],
   ["ape into cashcat", "Same: it needs a size before it spends anything."]
@@ -22,7 +29,7 @@ const SKIPS = [
   ["would you buy $50 of NVDA here?", "Still a question, even with an amount in it."],
   ["imagine buying $5 of that", "Hypotheticals and jokes are not orders."],
   ["what do you think of PEPE", "You get a take, not a trade."],
-  ["sell my PEPE", "Selling and withdrawing happen on your portfolio page, not by tweet."]
+  ["withdraw my ETH", "Withdrawing to another address happens on your portfolio page, so a tweet can never move funds off your wallet."]
 ];
 
 export default function Docs() {
@@ -44,6 +51,9 @@ export default function Docs() {
 
       <div className="divider"><span>These buy</span></div>
       <PhraseList items={BUYS} tone="yes" />
+
+      <div className="divider"><span>These sell, or show your bag</span></div>
+      <PhraseList items={SELLS} tone="yes" />
 
       <div className="divider"><span>These ask first</span></div>
       <PhraseList items={ASKS} tone="ask" />
@@ -73,9 +83,11 @@ export default function Docs() {
           per hour to each person. If you hit that, it tells you and picks back
           up shortly.
         </Note>
-        <Note title="Selling and withdrawing live here">
-          Sign in with X on your portfolio page to sell, withdraw to any address,
-          or export your private key and take the wallet with you.
+        <Note title="Buying and selling by tweet, withdrawing by hand">
+          Trades happen in the conversation, both directions. Moving funds out
+          of the wallet does not: sign in with X on your portfolio page to
+          withdraw to any address, or to export your private key and take the
+          wallet with you.
         </Note>
       </div>
 

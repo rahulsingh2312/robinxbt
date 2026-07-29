@@ -4,6 +4,7 @@ import { looksLikeTrade, parseOrder } from "./trading.js";
 import { fitForPost, limitCashtags, stripUrls } from "./insiders.js";
 import { describeBook } from "./paper-broker.js";
 import { parseBuyIntent } from "./onchain-broker.js";
+import { IntentReader } from "./intent-reader.js";
 import { redact } from "./http-guard.js";
 
 // Words that look like tickers but never are, so a basket is not built from
@@ -44,6 +45,9 @@ export class MentionWorker {
     // How far up a reply chain to read for context. Each extra hop is a
     // billed X read, so it is bounded and configurable.
     this.contextDepth = contextDepth;
+    // Reads orders the way people actually write them, falling back to the
+    // patterns when no model is configured or the call fails.
+    this.intentReader = new IntentReader({ llm, logger });
   }
 
   // Returns the reason a reply is refused, or null when it is allowed.
@@ -230,7 +234,9 @@ export class MentionWorker {
   // Decides whether a mention is an on-chain buy. Returns undefined to fall
   // through to advice/LLM handling — only clear intent moves money.
   async onchainReply(text, username, post) {
-    const intent = parseBuyIntent(text, this.bot.botUsername);
+    const intent = await this.intentReader.read(text, this.bot.botUsername, {
+      contextText: post.parentText ?? null
+    });
     // A bare "$50" only means something as an answer to our own "how much?"
     // ask, which the pending record proves.
     const pending = await this.pendingBuyFor(post);
@@ -242,8 +248,8 @@ export class MentionWorker {
       if (/\?/.test(text) && intent.amountUsd === null) return undefined;
       return this.runOnchainBuy({ intent, post, username });
     }
-    if (/\bsell\b/i.test(text) && !/\?/.test(text)) {
-      return `Selling and withdrawals live on your portfolio page — link in bio.`;
+    if (intent?.wantsSell || (/\bsell\b/i.test(text) && !/\?/.test(text))) {
+      return `Selling and withdrawals live on your portfolio page, link in bio. Sign in with X there and it takes one tap.`;
     }
     return undefined;
   }

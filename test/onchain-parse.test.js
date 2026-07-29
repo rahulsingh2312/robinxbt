@@ -31,7 +31,8 @@ test("casual phrases that merely mention money never order a buy", () => {
     "@mybot lol send it $25",
     "@mybot yolo $100"
   ]) {
-    assert.equal(parseBuyIntent(text, "mybot").wantsBuy, false, text);
+    // Either not an intent at all, or an amount with no order attached.
+    assert.notEqual(parseBuyIntent(text, "mybot")?.wantsBuy, true, text);
   }
 });
 

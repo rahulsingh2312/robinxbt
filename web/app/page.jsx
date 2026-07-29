@@ -32,7 +32,7 @@ export default function Home() {
     <main>
       <nav className="bar">
         <a className="wordmark" href="/"><img src="/pfp-peterpan.jpg" alt="" />peterpan.</a>
-        <span className="pill"><span className="dot" />LIVE ON ROBINHOOD CHAIN</span>
+        {/* <span className="pill"><span className="dot" />LIVE ON ROBINHOOD CHAIN</span> */}
       </nav>
 
       <header className="hero">

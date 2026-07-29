@@ -27,7 +27,13 @@ export function parseBuyIntent(text, botUsername) {
   let term = address;
   if (!term) {
     const afterVerb = command.match(/\b(?:buy|ape into|aping into)\b(?:\s+\$?[\d,.]+k?\s*(?:usd|dollars?|dollers?|bucks?|worth)?\s*(?:of|worth of)?)?\s+\$?([A-Za-z][A-Za-z0-9]{0,14})\b/i)?.[1];
-    if (afterVerb && !/^(me|some|that|this|it|the|a|an|usd|dollars?|dollers?|bucks?|worth|of|for|in|into|please|pls|now)$/i.test(afterVerb)) term = afterVerb.toUpperCase();
+    if (afterVerb && !FILLER.test(afterVerb)) term = afterVerb.toUpperCase();
+    if (!term) {
+      // "buy me $20 of pepe", "put 5 into wif": the asset trails a preposition
+      // rather than the verb.
+      const afterPreposition = command.match(/\b(?:of|into|in|on)\s+\$?([A-Za-z][A-Za-z0-9]{0,14})\b/i)?.[1];
+      if (afterPreposition && !FILLER.test(afterPreposition)) term = afterPreposition.toUpperCase();
+    }
     if (!term) {
       const cashtag = command.match(/\$([A-Za-z][A-Za-z0-9]{0,14})\b/)?.[1];
       if (cashtag && !/^\d/.test(cashtag)) term = cashtag.toUpperCase();
@@ -38,6 +44,9 @@ export function parseBuyIntent(text, botUsername) {
   if (!wantsBuy && term) return null; // a bare "$50" reply is an amount, not an order for token "50"
   return { wantsBuy, amountUsd, term };
 }
+
+// Words that stand where an asset would but never name one.
+const FILLER = /^(me|us|some|that|this|it|the|a|an|usd|dollars?|dollers?|bucks?|worth|of|for|in|into|on|please|pls|now|my|your)$/i;
 
 // "$50", "50$", "$1.5k", "20 bucks" — replies rarely spell out "USD".
 export function parseUsdAmount(text) {

@@ -22,7 +22,7 @@ function extractSymbols(text, limit = 4) {
 export class MentionWorker {
   // No reply may contain a URL. X charges $0.20 for a post with a link versus
   // $0.015 without, so the public base URL is deliberately not available here.
-  constructor({ store, client, bot, logger = console, broker = null, limits = null, insiders = null, llm = null, replyCaps = null, onchain = null, contextDepth = 3 }) {
+  constructor({ store, client, bot, logger = console, broker = null, limits = null, insiders = null, llm = null, replyCaps = null, onchain = null, contextDepth = 3, onFill = null }) {
     this.store = store;
     this.client = client;
     this.bot = bot;
@@ -48,6 +48,9 @@ export class MentionWorker {
     // Reads orders the way people actually write them, falling back to the
     // patterns when no model is configured or the call fails.
     this.intentReader = new IntentReader({ llm, logger });
+    // Notified after a real fill so the account can post about it. Trades
+    // never wait on this.
+    this.onFill = onFill;
   }
 
   // Returns the reason a reply is refused, or null when it is allowed.
@@ -331,6 +334,9 @@ export class MentionWorker {
       });
       if (pendingBuy) await this.store.clearPendingBuy(this.bot.botUsername, pendingBuy.postId);
       if (result.pendingBuy) this.pendingOnchainBuy = result.pendingBuy;
+      if (result.fill && this.onFill) {
+        try { this.onFill(result.fill); } catch (error) { this.logger.warn("Fill announcement failed", error.message); }
+      }
       return fitForPost(result.reply);
     } catch (error) {
       this.logger.error(`Onchain buy failed for post ${post.id}`, error);

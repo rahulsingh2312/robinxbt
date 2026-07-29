@@ -428,6 +428,9 @@ export class OnchainBroker {
         usd: amountUsd,
         extra: `${provenance}${cost}${warning}`
       }),
+      // Handed to the poster so a real trade can become a post. Deliberately
+      // carries no wallet, handle, or author id: the trade is the story.
+      fill: { symbol: asset.symbol, amount: formatQty(filled), amountUsd, official: Boolean(asset.official) },
       txHash: result.hash
     };
   }

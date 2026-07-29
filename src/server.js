@@ -126,6 +126,10 @@ if (config.llm.enabled && !llm.configured()) throw new Error("LLM_ENABLED=true r
 // gets a custodial wallet and buy intents fill from THEIR deposited funds —
 // the operator-account trading path above is bypassed for mentions.
 
+// Declared before the workers so a fill can reach the poster, and assigned
+// after, because the poster needs a configured worker to post through.
+let shitposter = null;
+
 const workers = config.bots.map((bot) => new MentionWorker({
   store,
   client: new XClient(bot),
@@ -136,7 +140,8 @@ const workers = config.bots.map((bot) => new MentionWorker({
   llm,
   replyCaps: config.replyCaps,
   contextDepth: config.contextDepth,
-  onchain
+  onchain,
+  onFill: (fill) => shitposter?.recordFill(fill)
 }));
 
 const RESPONSE_HEADERS = securityHeaders({ https: config.publicBaseUrl.startsWith("https:") || config.onchain.siteBaseUrl.startsWith("https:") });
@@ -164,7 +169,7 @@ const stream = config.appBearerToken && workers[0]?.client.configured()
 
 // Unprompted posting needs a voice and a mouth; without both it stays off
 // rather than half-working. Dry run is handled inside the poster itself.
-const shitposter = gork && config.persona.posting.enabled && llm?.configured() && workers[0]?.client.configured()
+shitposter = gork && config.persona.posting.enabled && llm?.configured() && workers[0]?.client.configured()
   ? new Shitposter({
       client: workers[0].client,
       llm,

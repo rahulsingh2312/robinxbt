@@ -20,6 +20,34 @@ export class Shitposter {
     this.memory = memory;
     this.recent = [];
     this.recentSeeds = [];
+    // Real fills are the only content nobody else on this timeline can post,
+    // so they jump the queue. Anonymous by default: the trade is the story,
+    // and publishing whose wallet it was is not ours to do.
+    this.pendingFills = [];
+    this.lastFillPostAt = 0;
+  }
+
+  // Called after a real fill. Never posts inline — it queues, so a trade is
+  // never delayed by a tweet, and the poster decides when it goes out.
+  recordFill(fill) {
+    this.pendingFills.push({ ...fill, at: Date.now() });
+    if (this.pendingFills.length > 20) this.pendingFills.shift();
+    // A fill is worth interrupting the schedule for, but not worth spamming:
+    // at most one every twenty minutes, and only if nothing just went out.
+    const quiet = Date.now() - this.lastFillPostAt > 20 * 60_000;
+    if (quiet && this.timer) {
+      clearTimeout(this.timer);
+      this.timer = setTimeout(() => this.fire(), 45_000 + Math.random() * 90_000);
+    }
+  }
+
+  // Turns a queued fill into a seed with the real numbers in it.
+  fillSeed() {
+    const fill = this.pendingFills.shift();
+    if (!fill) return null;
+    this.lastFillPostAt = Date.now();
+    const size = fill.amountUsd >= 100 ? "a real size" : fill.amountUsd >= 20 ? "a normal size" : "pocket change";
+    return `Someone just tweeted at you and you bought them ${fill.amount} ${fill.symbol} for $${fill.amountUsd}. That is ${size}. Post about that specific fill: what they bought, what it cost, and the fact that it happened because they typed one sentence at you. Do not name the person or their handle. Be smug that this works. End by telling everyone else they can do the same thing.`;
   }
 
   start() {
@@ -56,7 +84,8 @@ export class Shitposter {
 
   async fire() {
     try {
-      const seed = this.pickSeed();
+      // A real trade beats any prompt about the market.
+      const seed = this.fillSeed() ?? this.pickSeed();
       const answer = await this.llm.ask(seed + this.avoidBlock());
       const text = limitCashtags(fitForPost(answer.text));
       if (text) this.recent = [...this.recent, text].slice(-this.memory);

@@ -88,3 +88,39 @@ test("a broker or LLM failure does not throw out of fire()", async () => {
   await shitposter.fire();
   assert.equal(calls.posted.length, 0);
 });
+
+test("a real fill jumps the queue and becomes a post", async () => {
+  // A trade nobody else on the timeline can post is the best content the
+  // account has; it should not wait for the next scheduled slot.
+  const posted = [];
+  const poster = new Shitposter({
+    client: { post: async (text) => { posted.push(text); return { data: { id: "1" } }; } },
+    llm: { ask: async (seed) => ({ text: seed.includes("just tweeted at you") ? "someone typed one sentence and now owns 24 CASHCAT" : "generic take" }) },
+    bot: { botUsername: "peterpan", dryRun: false },
+    seeds: ["generic seed"],
+    minIntervalMs: 60_000,
+    maxIntervalMs: 60_000,
+    logger: { info() {}, warn() {}, error() {} }
+  });
+  poster.recordFill({ symbol: "CASHCAT", amount: "24.14", amountUsd: 1 });
+  await poster.fire();
+  // fire() reschedules, so the timer has to be cleared or the test hangs.
+  poster.stop();
+  assert.equal(posted.length, 1);
+  assert.match(posted[0], /one sentence/);
+});
+
+test("a fill never carries the buyer's identity into a post", async () => {
+  const poster = new Shitposter({
+    client: { post: async () => ({ data: { id: "1" } }) },
+    llm: { ask: async () => ({ text: "x" }) },
+    bot: { botUsername: "peterpan", dryRun: true },
+    seeds: ["s"], minIntervalMs: 1, maxIntervalMs: 1,
+    logger: { info() {}, warn() {}, error() {} }
+  });
+  poster.recordFill({ symbol: "PEPE", amount: "1000", amountUsd: 20 });
+  poster.stop();
+  const seed = poster.fillSeed();
+  assert.match(seed, /Do not name the person/i);
+  assert.doesNotMatch(seed, /0x|@/);
+});

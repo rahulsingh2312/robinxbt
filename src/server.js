@@ -96,7 +96,11 @@ if (config.onchain.enabled) {
   const chain = new ChainClient({ rpcUrl: config.onchain.rpcUrl });
   const dex = new Dex({ provider: chain.provider, slippageBps: config.onchain.slippageBps });
   const resolver = new AssetResolver({ baseUrl: config.onchain.blockscoutBaseUrl });
-  onchain = new OnchainBroker({ store, vault, chain, dex, resolver, config: config.onchain });
+  onchain = new OnchainBroker({
+    store, vault, chain, dex, resolver,
+    // The trading replies speak in whichever voice the account is running.
+    config: { ...config.onchain, persona: config.persona.name }
+  });
   onchainApi = new OnchainApi({ config, store, vault, chain, onchain });
   if (!onchainApi.oauthReady()) {
     console.warn("Onchain mode is on but X_CLIENT_ID is missing: the portfolio site will be read-only (no sign-in, withdraw, or key export).");

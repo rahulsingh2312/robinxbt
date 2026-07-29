@@ -139,3 +139,25 @@ test("asking what you hold returns the portfolio", async () => {
   await worker.handleMention({ id: "910", author_id: "42", username: "alice", text: "@mybot show me my portfolio" });
   assert.equal(calls.portfolio.length, 1);
 });
+
+test("a reply X refuses for containing an address is re-sent without it", async () => {
+  const { worker, store } = makeWorker();
+  await store.load();
+  const attempts = [];
+  worker.bot.dryRun = false;
+  worker.client.reply = async (postId, text) => {
+    attempts.push(text);
+    if (/0x[0-9a-fA-F]{40}/.test(text)) {
+      throw new Error('X API 403: {"detail":"Crypto addresses are prohibited for the first 7 days after authentication."}');
+    }
+    return { data: { id: "sent1" } };
+  };
+  worker.onchain.handleBuy = async () => ({
+    reply: "Your wallet's short. Send to 0x6037bF867a7C49793D2933b334273148189e60C6 on Robinhood Chain, then tell me to buy again."
+  });
+  await worker.handleMention({ id: "950", author_id: "42", username: "alice", text: "@mybot buy $5 of NVDA" });
+  assert.equal(attempts.length, 2, "should retry once");
+  assert.match(attempts[0], /0x6037bF86/);
+  assert.doesNotMatch(attempts[1], /0x[0-9a-fA-F]{40}/);
+  assert.match(attempts[1], /portfolio page/);
+});

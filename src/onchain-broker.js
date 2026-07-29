@@ -1,6 +1,7 @@
 import { formatEther, parseEther } from "ethers";
 import { extractAssetTerms } from "./asset-resolver.js";
 import { NATIVE } from "./dex.js";
+import { TradeVoice } from "./trade-voice.js";
 
 // Reads a buy out of a mention. Unlike the operator-account parser this one
 // accepts contract addresses and long memecoin tickers, and it tolerates a
@@ -96,6 +97,9 @@ export class OnchainBroker {
     this.walletLocks = new Map();
     // Many viewers of one portfolio should be one explorer call, not many.
     this.holdingsCache = new Map();
+    // Fills and refusals speak in the account's voice; the numbers inside
+    // them are produced here and never by the phrasing.
+    this.voice = new TradeVoice(config.persona);
   }
 
   async withWalletLock(authorId, work) {
@@ -149,7 +153,7 @@ export class OnchainBroker {
     // guard, because a ticker is a name anyone can claim.
     const explicitAddress = /^0x[0-9a-fA-F]{40}$/.test(String(term ?? ""));
     if (!term) {
-      return { reply: `Tell me what to buy: a ticker like $NVDA or a contract address, plus a dollar amount.` };
+      return { reply: this.voice.say("askAsset") };
     }
     let asset = await this.resolver.resolve(term);
     if (asset?.ambiguous) {
@@ -199,12 +203,12 @@ export class OnchainBroker {
       // No size yet: the worker saves this against its own reply ID so the
       // user's next "$50" lands on the right asset.
       return {
-        reply: `How much ${asset.symbol}? Reply with a dollar amount like $25 and I’ll fill it from your wallet.`,
+        reply: this.voice.say("askAmount", { symbol: asset.symbol }),
         pendingBuy: { authorId: String(authorId), term: asset.address }
       };
     }
     if (amountUsd > this.config.maxOrderUsd) {
-      return { reply: `That’s over my per-order cap of $${this.config.maxOrderUsd}. Try a smaller size.` };
+      return { reply: this.voice.say("overCap", { cap: this.config.maxOrderUsd }) };
     }
 
     const ethUsd = await this.dex.ethUsdPrice();
@@ -255,7 +259,10 @@ export class OnchainBroker {
     // beats the generic funding message.
     if (!spend && usdgBalance >= usdgUnits) {
       return {
-        reply: `You’ve got the $${amountUsd} in USDG, but no ETH for gas. Send a little ETH on Robinhood Chain (${formatEthAmount(Math.max(this.config.gasReserveEth * 2, 0.0005))} covers it). Address on your portfolio page, link in bio. Then tell me to buy again.`
+        reply: this.voice.say("needsGas", {
+          usd: amountUsd,
+          gas: formatEthAmount(Math.max(this.config.gasReserveEth * 2, 0.0005))
+        })
       };
     }
 
@@ -270,7 +277,7 @@ export class OnchainBroker {
         ? `Send to ${wallet.address} on Robinhood Chain`
         : `Your deposit address is on your portfolio page (link in bio, @${wallet.xUsername || username})`;
       return {
-        reply: `Your wallet’s short for that. Send ${formatEthAmount(shortfall)} more ETH (or $${amountUsd} USDG plus gas dust). ${where}, then tell me to buy again.`
+        reply: this.voice.say("needsFunds", { shortfall: formatEthAmount(shortfall), usd: amountUsd, where })
       };
     }
 
@@ -281,7 +288,7 @@ export class OnchainBroker {
     const buyAmount = spend.convertTo === NATIVE ? wantWei : spend.convertTo ? usdgUnits : spend.amountIn;
     const route = await this.dex.findBestRoute(buyWith, asset.address, buyAmount);
     if (!route) {
-      return { reply: `${asset.symbol} has no tradable market at that size right now, so I can’t buy it.` };
+      return { reply: this.voice.say("noMarket", { symbol: asset.symbol }) };
     }
     const meta = await this.chain.getTokenMeta(asset.address);
 
@@ -307,7 +314,7 @@ export class OnchainBroker {
       ? ` Heads up: exit liquidity is thin, selling back right now would cost about ${(roundTripLossBps / 100).toFixed(0)}%.`
       : "";
     if (roundTripLossBps > 9000 && !explicitAddress) {
-      return { reply: `${asset.symbol} takes money in and gives almost nothing back out, which is what a honeypot looks like. Not buying it for you.` };
+      return { reply: this.voice.say("honeypot", { symbol: asset.symbol }) };
     }
 
     // One-way impact against the indexed price, when there is one to compare
@@ -318,7 +325,7 @@ export class OnchainBroker {
       const outValueUsd = (Number(route.amountOut) / 10 ** meta.decimals) * asset.priceUsd;
       impactBps = Math.max(0, Math.round((1 - outValueUsd / amountUsd) * 10000));
       if (impactBps > budget && !explicitAddress) {
-        return { reply: `Liquidity for ${asset.symbol} is too thin: a $${amountUsd} buy would lose ${(impactBps / 100).toFixed(1)}% to price impact. Not doing that to you.` };
+        return { reply: this.voice.say("tooThin", { symbol: asset.symbol, percent: (impactBps / 100).toFixed(1), usd: amountUsd }) };
       }
     }
 
@@ -357,15 +364,28 @@ export class OnchainBroker {
       // Two proven single-hop swaps: turn the funds into the currency this
       // token actually trades against, then buy with everything that produced
       // (minus the gas ETH must keep back).
+      // Measured before and after, because the wallet may already hold some of
+      // the currency being converted into. Spending the whole balance would
+      // buy far more than the order asked for.
+      const balanceBefore = spend.convertTo === NATIVE
+        ? await this.chain.getEthBalance(wallet.address, { fresh: true })
+        : (await this.chain.getTokenBalance(spend.convertTo, wallet.address)).raw;
+
       const converted = await this.dex.swap(signer, spend.tokenIn, spend.convertTo, spend.amountIn, {
         slippageBps: this.config.maxSlippageBps
       });
-      let buyAmountIn;
+
+      const balanceAfter = spend.convertTo === NATIVE
+        ? await this.chain.getEthBalance(wallet.address, { fresh: true })
+        : (await this.chain.getTokenBalance(spend.convertTo, wallet.address)).raw;
+
+      // Only what this conversion produced is available to spend. On the ETH
+      // side the swap also paid gas out of the same balance, so the proceeds
+      // are floored at zero and the reserve is kept back on top.
+      let buyAmountIn = balanceAfter > balanceBefore ? balanceAfter - balanceBefore : 0n;
       if (spend.convertTo === NATIVE) {
-        const funded = await this.chain.getEthBalance(wallet.address, { fresh: true });
-        buyAmountIn = funded > gasReserve ? funded - gasReserve : 0n;
-      } else {
-        buyAmountIn = (await this.chain.getTokenBalance(spend.convertTo, wallet.address)).raw;
+        const spendable = balanceAfter > gasReserve ? balanceAfter - gasReserve : 0n;
+        if (buyAmountIn > spendable) buyAmountIn = spendable;
       }
       if (buyAmountIn <= 0n) {
         return {
@@ -388,7 +408,12 @@ export class OnchainBroker {
     const cost = !explicitAddress && impactBps >= 100 ? ` Cost you ${(impactBps / 100).toFixed(1)}% in price impact.` : "";
     const warning = explicitAddress ? "" : exitWarning;
     return {
-      reply: `Bought ~${formatQty(filled)} ${asset.symbol} for $${amountUsd}${provenance}.${cost}${warning} It’s in your wallet. Check the portfolio link in bio to see and manage your assets.`,
+      reply: this.voice.say("filled", {
+        amount: formatQty(filled),
+        symbol: asset.symbol,
+        usd: amountUsd,
+        extra: `${provenance}${cost}${warning}`
+      }),
       txHash: result.hash
     };
   }
@@ -414,7 +439,7 @@ export class OnchainBroker {
     if (ethAmount > 0) rows.push({ symbol: "ETH", amount: ethAmount, valueUsd: ethValue });
 
     if (rows.length === 0) {
-      return `Nothing in your wallet yet. Fund it from your portfolio page, link in bio, then tell me what to buy.`;
+      return this.voice.say("emptyBag");
     }
 
     const total = rows.reduce((sum, row) => sum + (row.valueUsd ?? 0), 0);
@@ -449,7 +474,7 @@ export class OnchainBroker {
           item.address.toLowerCase() === term.toLowerCase())
       : holdings[0];
     if (!holding) {
-      return { reply: `You're not holding any ${term}. You have ${holdings.slice(0, 3).map((item) => item.symbol).join(", ")}.` };
+      return { reply: this.voice.say("nothingToSell", { symbol: term, held: holdings.slice(0, 3).map((item) => item.symbol).join(", ") }) };
     }
 
     const meta = await this.chain.getTokenMeta(holding.address);
@@ -470,7 +495,7 @@ export class OnchainBroker {
 
     const gasReserve = parseEther(String(this.config.gasReserveEth));
     if ((await this.chain.getEthBalance(wallet.address)) < gasReserve) {
-      return { reply: `Selling costs gas and your wallet has none. Send a little ETH on Robinhood Chain, then ask again.` };
+      return { reply: this.voice.say("sellNoGas") };
     }
 
     // Sell into whichever quote currency this token actually trades against.
@@ -500,7 +525,7 @@ export class OnchainBroker {
       : `$${formatMoney(Number(result.quotedOut) / 10 ** (await this.dex.usdgDecimals()))} USDG`;
     this.logger.info(`Onchain sell: ${sold} ${holding.symbol} for author ${authorId}, tx ${result.hash}`);
     return {
-      reply: `Sold ${formatCompact(sold)} ${holding.symbol} for ${proceeds}. It's back in your wallet, check the portfolio link in bio.`,
+      reply: this.voice.say("sold", { amount: formatCompact(sold), symbol: holding.symbol, proceeds }),
       txHash: result.hash
     };
   }

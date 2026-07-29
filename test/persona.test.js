@@ -65,3 +65,21 @@ test("prompt bars date guesses and trailing ticker lists", () => {
   assert.match(GORK_SYSTEM_PROMPT, /Never state the current date, year, or quarter/i);
   assert.match(GORK_SYSTEM_PROMPT, /Never tack a list of tickers onto the end/i);
 });
+
+test("the persona forbids treating an asset class as a ticker", () => {
+  // A real reply went hunting for a token called ROBINHOOD because someone
+  // tweeted "ROBINHOOD TOKENS" in caps, then roasted the honeypot it found.
+  assert.match(GORK_SYSTEM_PROMPT, /capitalised does not make it a ticker/i);
+  assert.match(GORK_SYSTEM_PROMPT, /asset class, not a symbol/i);
+});
+
+test("the persona knows what to do when a post is about the bot itself", () => {
+  assert.match(GORK_SYSTEM_PROMPT, /WHEN THEY ARE TALKING ABOUT YOU/);
+  assert.match(GORK_SYSTEM_PROMPT, /promoting you is doing you a favour/i);
+  assert.match(GORK_SYSTEM_PROMPT, /they hold the keys/i);
+});
+
+test("endorsements get a victory lap, not a token lookup", () => {
+  assert.match(GORK_SYSTEM_PROMPT, /Endorsements sound like/i);
+  assert.match(GORK_SYSTEM_PROMPT, /no ticker in a compliment/i);
+});

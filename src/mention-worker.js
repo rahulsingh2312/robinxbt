@@ -179,14 +179,30 @@ export class MentionWorker {
     }
     // X prepends the mention on a reply automatically, so `reply` must not
     // repeat it or the post ships with the handle twice.
+    const text = stripUrls(limitCashtags(reply));
     let sent;
     try {
-      sent = await this.client.reply(post.id, stripUrls(limitCashtags(reply)));
+      sent = await this.client.reply(post.id, text);
     } catch (error) {
-      // The claim is released so the poll fallback can retry. Orders are
-      // guarded separately by claimOrder, so a retry cannot double-fill.
-      await this.store.releaseMention?.(this.bot.botUsername, post.id);
-      throw error;
+      // X refuses posts containing a wallet address for the first week after
+      // an app authenticates, and filters them as spam afterwards. Losing the
+      // whole reply over that is worse than losing the address, so the same
+      // answer goes out pointing at the portfolio page instead.
+      const rewritten = withoutWalletAddress(text);
+      if (rewritten !== text && isAddressRejection(error)) {
+        this.logger.warn(`X rejected the wallet address in reply to ${post.id}; sending without it`);
+        try {
+          sent = await this.client.reply(post.id, rewritten);
+        } catch (retryError) {
+          await this.store.releaseMention?.(this.bot.botUsername, post.id);
+          throw retryError;
+        }
+      } else {
+        // The claim is released so the poll fallback can retry. Orders are
+        // guarded separately by claimOrder, so a retry cannot double-fill.
+        await this.store.releaseMention?.(this.bot.botUsername, post.id);
+        throw error;
+      }
     }
     await this.recordReply(post.author_id);
     const sentId = sent?.data?.id;
@@ -513,6 +529,20 @@ export class MentionWorker {
       return undefined;
     }
   }
+}
+
+function isAddressRejection(error) {
+  return /crypto address|not-authorized-for-resource|403/i.test(String(error?.message ?? ""));
+}
+
+// Swaps a wallet address out for the place it can always be read instead.
+function withoutWalletAddress(text) {
+  return text
+    .replace(/\bSend at least ([\d.]+ ETH) to 0x[0-9a-fA-F]{40} on Robinhood Chain/i,
+      "Send at least $1 to the address on your portfolio page, link in bio")
+    .replace(/\bSend to 0x[0-9a-fA-F]{40} on Robinhood Chain/i,
+      "Your deposit address is on your portfolio page, link in bio")
+    .replace(/\b0x[0-9a-fA-F]{40}\b/g, "the address on your portfolio page (link in bio)");
 }
 
 // Raw revert data is useless in a tweet; the recognizable failures get plain

@@ -112,15 +112,38 @@ export class LlmClient {
       const message = await this.complete(messages, round < this.maxToolRounds ? tools : []);
       messages.push(message);
       const calls = message.tool_calls ?? [];
-      if (calls.length === 0) return { text: (message.content ?? "").trim(), rounds: round };
+      if (calls.length === 0) {
+        const text = (message.content ?? "").trim();
+        if (text) return { text, rounds: round };
+        // Content can come back empty when reasoning ate the budget. Silence
+        // posts a canned fallback, so ask once more with nothing to think
+        // about but the sentence.
+        return { text: await this.finalAnswer(messages), rounds: round };
+      }
 
       for (const call of calls) {
         const result = await this.runTool(call);
         messages.push({ role: "tool", tool_call_id: call.id, content: result });
       }
     }
-    // Loop exhausted without a plain answer.
-    return { text: "", rounds: this.maxToolRounds };
+    // Tool rounds exhausted: everything needed has been fetched, so demand the
+    // reply itself rather than returning nothing.
+    return { text: await this.finalAnswer(messages), rounds: this.maxToolRounds };
+  }
+
+  // One last completion with no tools available and an explicit instruction to
+  // just answer. Returns "" only if even that fails.
+  async finalAnswer(messages) {
+    try {
+      const message = await this.complete(
+        [...messages, { role: "user", content: "Reply now, in your voice, using what you already have. Two sentences, plain text." }],
+        []
+      );
+      return (message.content ?? "").trim();
+    } catch (error) {
+      this.logger.warn("Final answer attempt failed", error.message);
+      return "";
+    }
   }
 
   async runTool(call) {

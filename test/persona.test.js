@@ -63,7 +63,7 @@ test("post seeds are non-empty and mostly not about robinhood", () => {
 
 test("prompt bars date guesses and trailing ticker lists", () => {
   assert.match(GORK_SYSTEM_PROMPT, /Never state the current date, year, or quarter/i);
-  assert.match(GORK_SYSTEM_PROMPT, /Never tack a list of tickers onto the end/i);
+  assert.match(GORK_SYSTEM_PROMPT, /Never end a reply with a bare cashtag/i);
 });
 
 test("the persona forbids treating an asset class as a ticker", () => {

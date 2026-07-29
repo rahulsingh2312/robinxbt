@@ -12,7 +12,8 @@
     "db:migrate": "node --env-file-if-exists=.env src/migrate-to-postgres.js",
     "db:backup": "node --env-file-if-exists=.env src/backup-db.js",
     "sim:users": "node --env-file-if-exists=.env test/manual/simulate-users.mjs",
-    "sim:chain": "node --env-file-if-exists=.env test/manual/preflight-chain.mjs"
+    "sim:chain": "node --env-file-if-exists=.env test/manual/preflight-chain.mjs",
+    "sim:voice": "node --env-file-if-exists=.env test/manual/voice-lab.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

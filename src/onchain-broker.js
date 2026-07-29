@@ -215,30 +215,43 @@ export class OnchainBroker {
     }
     const meta = await this.chain.getTokenMeta(asset.address);
 
-    // Thin-pool guard, measured two ways because either source can lie.
-    // First against the indexed price when one exists.
-    if (asset.priceUsd) {
-      const outValueUsd = (Number(route.amountOut) / 10 ** meta.decimals) * asset.priceUsd;
-      const impact = 1 - outValueUsd / amountUsd;
-      if (impact > this.config.maxPriceImpactBps / 10000) {
-        return { reply: `Liquidity for ${asset.symbol} is too thin: a $${amountUsd} buy would lose ${(impact * 100).toFixed(1)}% to price impact. Not doing that to you.` };
-      }
-    }
-    // Then against the pool itself: quote selling the output straight back.
-    // A honeypot or a pool seeded to swallow buys fails here even when the
-    // explorer has never priced the token, which is exactly the case where
-    // the check above cannot help.
+    // What this order actually costs, measured on the chain rather than
+    // assumed. A deep stock pool and a thin memecoin pool are different
+    // products, so each gets a budget that matches how it really behaves.
+    const budget = asset.official ? this.config.maxPriceImpactBps : this.config.maxPriceImpactUnverifiedBps;
+
+    // Sell the position straight back to see what the pool would give: this
+    // catches honeypots and rigged depth even for tokens nobody has priced.
     const roundTrip = await this.dex.findBestRoute(asset.address, spend.tokenIn, route.amountOut).catch(() => null);
     if (!roundTrip || roundTrip.amountOut === 0n) {
       return { reply: `${asset.symbol} can be bought but not sold back right now, which is how honeypots work. Skipping it.` };
     }
-    const retained = Number(roundTrip.amountOut) / Number(spend.amountIn);
-    const roundTripLossBps = Math.round((1 - retained) * 10000);
-    // A round trip always costs two pool fees, so the allowance is the impact
-    // budget doubled plus a fee margin.
-    if (roundTripLossBps > this.config.maxPriceImpactBps * 2 + 200) {
-      return { reply: `${asset.symbol} would lose ${(roundTripLossBps / 100).toFixed(1)}% on a buy-then-sell round trip. That pool is too thin or rigged. Not doing it.` };
+    const roundTripLossBps = Math.round((1 - Number(roundTrip.amountOut) / Number(spend.amountIn)) * 10000);
+    // A round trip pays the pool fee twice and crosses the spread twice, so
+    // the fair comparison is roughly double the one-way budget.
+    if (roundTripLossBps > budget * 2 + 100) {
+      return { reply: `${asset.symbol} would lose ${(roundTripLossBps / 100).toFixed(1)}% buying in and selling back out. That pool is too thin to fill $${amountUsd} safely, so I'm not doing it.` };
     }
+
+    // One-way impact against the indexed price, when there is one to compare
+    // against. Half the round trip is the fallback estimate for tokens the
+    // explorer has never priced.
+    let impactBps = Math.max(0, Math.round(roundTripLossBps / 2));
+    if (asset.priceUsd) {
+      const outValueUsd = (Number(route.amountOut) / 10 ** meta.decimals) * asset.priceUsd;
+      impactBps = Math.max(0, Math.round((1 - outValueUsd / amountUsd) * 10000));
+      if (impactBps > budget) {
+        return { reply: `Liquidity for ${asset.symbol} is too thin: a $${amountUsd} buy would lose ${(impactBps / 100).toFixed(1)}% to price impact. Not doing that to you.` };
+      }
+    }
+
+    // Slippage is the room between the quote and the fill, so it should track
+    // how much this pool moves, not a single global guess. Too tight and every
+    // memecoin buy reverts; too loose and a sandwich has somewhere to hide.
+    const slippageBps = Math.min(
+      this.config.maxSlippageBps,
+      Math.max(this.config.slippageBps, Math.round(impactBps / 2) + this.config.slippageBps)
+    );
 
     // Re-assert the cap against the real outlay: the ETH path sizes through a
     // spot quote, and a depressed quote would otherwise send more ETH than the
@@ -255,12 +268,15 @@ export class OnchainBroker {
     }
 
     const signer = this.vault.signerFor(wallet, this.chain.provider);
-    const result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn, { route });
+    const result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn, { route, slippageBps });
     const filled = Number(result.quotedOut) / 10 ** meta.decimals;
     this.logger.info(`Onchain buy: $${amountUsd} of ${asset.symbol} for author ${authorId}, tx ${result.hash}`);
     const provenance = borrowed && !asset.official ? ` (${asset.symbol} came from that tweet, not from me)` : "";
+    // Say it out loud when the pool charged real money for the trade; silence
+    // would leave the user to discover it in their balance.
+    const cost = impactBps >= 100 ? ` Cost you ${(impactBps / 100).toFixed(1)}% in price impact.` : "";
     return {
-      reply: `Bought ~${formatQty(filled)} ${asset.symbol} for $${amountUsd}${provenance}. It’s in your wallet. Check the portfolio link in bio to see and manage your assets.`,
+      reply: `Bought ~${formatQty(filled)} ${asset.symbol} for $${amountUsd}${provenance}.${cost} It’s in your wallet. Check the portfolio link in bio to see and manage your assets.`,
       txHash: result.hash
     };
   }

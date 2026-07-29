@@ -8,7 +8,15 @@ import { OnchainBroker } from "../src/onchain-broker.js";
 import { WalletVault } from "../src/wallet-vault.js";
 import { Store } from "../src/store.js";
 
-const CONFIG = { maxOrderUsd: 100, gasReserveEth: 0.0002, maxPriceImpactBps: 300, blockscoutBaseUrl: "https://example.invalid" };
+const CONFIG = {
+  maxOrderUsd: 100,
+  gasReserveEth: 0.0002,
+  slippageBps: 50,
+  maxSlippageBps: 500,
+  maxPriceImpactBps: 150,
+  maxPriceImpactUnverifiedBps: 700,
+  blockscoutBaseUrl: "https://example.invalid"
+};
 const NVDA = { address: "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC", symbol: "NVDA", name: "NVIDIA • Robinhood Token", official: true, priceUsd: 197 };
 
 const USDG = "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168";
@@ -247,4 +255,36 @@ test("a ticker with no fillable pool is refused, not guessed at", async () => {
   broker.dex.findBestRoute = async () => null;
   const picked = await broker.pickByLiquidity([{ address: "0x5555555555555555555555555555555555555555", symbol: "GHOST" }]);
   assert.equal(picked, null);
+});
+
+test("slippage tracks how much the pool actually moves", async () => {
+  // A deep pool gets a tight bound; a thin one gets enough room to fill.
+  const tight = await makeBroker({ balanceEth: 1 });
+  const captured = [];
+  tight.broker.dex.swap = async (signer, tokenIn, tokenOut, amountIn, opts) => {
+    captured.push(opts.slippageBps);
+    return { hash: "0x1", quotedOut: 10n ** 17n, minAmountOut: 1n, route: "single" };
+  };
+  // Round trip loses ~1%, so one-way impact reads as ~0.5%: near-base slippage.
+  tight.broker.dex.findBestRoute = async (tokenIn, tokenOut, amountIn) =>
+    ({ kind: "single", amountOut: tokenIn === NVDA.address ? (amountIn * 99n) / 100n : 252_500_000_000_000_000n });
+  await tight.broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 50, term: "NVDA" }, parentText: "", dryRun: false
+  });
+  assert.ok(captured[0] <= 100, `deep pool slippage was ${captured[0]}bps`);
+  assert.ok(captured[0] >= 50);
+});
+
+test("a fill that cost real money says so in the reply", async () => {
+  const { broker } = await makeBroker({ balanceEth: 1, resolveTo: { ...NVDA, official: false, priceUsd: 197 } });
+  // Quote comes in ~4% under the indexed value: inside the unverified budget,
+  // but the user is told what it cost.
+  broker.dex.findBestRoute = async (tokenIn, tokenOut, amountIn) =>
+    ({ kind: "single", amountOut: tokenIn === NVDA.address ? (amountIn * 92n) / 100n : 243_600_000_000_000_000n });
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 50, term: "NVDA" }, parentText: "", dryRun: false
+  });
+  assert.match(result.reply, /price impact/);
 });

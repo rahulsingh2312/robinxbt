@@ -74,11 +74,20 @@ function loadOnchain() {
     throw new Error("SESSION_SECRET must be at least 32 bytes; generate with `openssl rand -hex 32`, or leave it unset to derive one from WALLET_ENC_KEY");
   }
   const maxOrderUsd = Number(process.env.ONCHAIN_MAX_ORDER_USD ?? 100);
-  const slippageBps = Number(process.env.ONCHAIN_SLIPPAGE_BPS ?? 100);
   const gasReserveEth = Number(process.env.ONCHAIN_GAS_RESERVE_ETH ?? 0.0002);
-  const maxPriceImpactBps = Number(process.env.ONCHAIN_MAX_PRICE_IMPACT_BPS ?? 300);
+  // Slippage and impact are tiered, because one number cannot serve both a
+  // stock token that round-trips at 99.9% and a memecoin where a $20 trade
+  // legitimately moves the price. Verified issuer tokens get tight bounds
+  // (loose ones would only ever be exploited); unverified tokens get enough
+  // room to fill, with the honesty of a warning in the reply.
+  const slippageBps = Number(process.env.ONCHAIN_SLIPPAGE_BPS ?? 50);
+  const maxSlippageBps = Number(process.env.ONCHAIN_MAX_SLIPPAGE_BPS ?? 500);
+  const maxPriceImpactBps = Number(process.env.ONCHAIN_MAX_PRICE_IMPACT_BPS ?? 150);
+  const maxPriceImpactUnverifiedBps = Number(process.env.ONCHAIN_MAX_PRICE_IMPACT_UNVERIFIED_BPS ?? 700);
   if (!Number.isFinite(maxOrderUsd) || maxOrderUsd <= 0) throw new Error("ONCHAIN_MAX_ORDER_USD must be a positive number");
   if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > 3000) throw new Error("ONCHAIN_SLIPPAGE_BPS must be an integer between 1 and 3000");
+  if (!Number.isInteger(maxSlippageBps) || maxSlippageBps < slippageBps || maxSlippageBps > 3000) throw new Error("ONCHAIN_MAX_SLIPPAGE_BPS must be an integer between ONCHAIN_SLIPPAGE_BPS and 3000");
+  if (!Number.isInteger(maxPriceImpactUnverifiedBps) || maxPriceImpactUnverifiedBps < maxPriceImpactBps || maxPriceImpactUnverifiedBps > 10000) throw new Error("ONCHAIN_MAX_PRICE_IMPACT_UNVERIFIED_BPS must be between ONCHAIN_MAX_PRICE_IMPACT_BPS and 10000");
   if (!Number.isFinite(gasReserveEth) || gasReserveEth < 0) throw new Error("ONCHAIN_GAS_RESERVE_ETH must be >= 0");
   if (!Number.isInteger(maxPriceImpactBps) || maxPriceImpactBps < 10 || maxPriceImpactBps > 10000) throw new Error("ONCHAIN_MAX_PRICE_IMPACT_BPS must be an integer between 10 and 10000");
   return {
@@ -90,7 +99,9 @@ function loadOnchain() {
     maxOrderUsd,
     slippageBps,
     gasReserveEth,
+    maxSlippageBps,
     maxPriceImpactBps,
+    maxPriceImpactUnverifiedBps,
     // X hard-blocks crypto addresses in posts for 7 days after the app
     // authenticates. Leave false until the account is old enough, then opt in
     // to putting the deposit address directly in funding replies.

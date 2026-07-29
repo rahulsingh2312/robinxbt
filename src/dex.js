@@ -135,8 +135,9 @@ export class Dex {
     return this.usdgMetaCache;
   }
 
-  minOut(amountOut) {
-    return (amountOut * BigInt(10000 - this.slippageBps)) / 10000n;
+  minOut(amountOut, slippageBps = null) {
+    const bps = slippageBps ?? this.slippageBps;
+    return (amountOut * BigInt(10000 - bps)) / 10000n;
   }
 
   // Encodes UniversalRouter.execute for an exact-in swap in either direction.
@@ -197,11 +198,13 @@ export class Dex {
   // the owner's own key; ETH input is sent as value, ERC-20 input via Permit2.
   // A caller that already discovered a sized route passes it to avoid a
   // second full quote sweep against the rate-limited RPC.
-  async swap(signer, tokenIn, tokenOut, amountInWei, { route: presetRoute = null } = {}) {
+  async swap(signer, tokenIn, tokenOut, amountInWei, { route: presetRoute = null, slippageBps = null } = {}) {
     const route = presetRoute ?? await this.findBestRoute(tokenIn, tokenOut, amountInWei);
     if (!route) throw new Error("no liquidity route found for this pair");
     if (!sameAddress(tokenIn, NATIVE)) await this.ensureAllowances(signer, tokenIn, amountInWei);
-    const minAmountOut = this.minOut(route.amountOut);
+    // The caller sizes slippage per asset: a deep stock pool needs almost
+    // none, a thin memecoin pool needs real room or every buy reverts.
+    const minAmountOut = this.minOut(route.amountOut, slippageBps);
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 120);
     const { commands, inputs } = this.buildSwapCalldata(route, tokenOut, amountInWei, minAmountOut, deadline);
     const router = new Contract(this.addresses.universalRouter, ROUTER_ABI, signer);

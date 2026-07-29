@@ -33,7 +33,7 @@ const WRITE_TOOL = /order|buy|sell|trade|transfer|deposit|withdraw|cancel|replac
 const NON_LATIN = /[Ѐ-ӿ֐-׿؀-ۿऀ-ॿ฀-๿぀-ヿ㐀-䶿一-鿿가-힯]/;
 
 export class LlmClient {
-  constructor({ baseUrl, apiKey, model, reasoningEffort = "low", broker = null, maxToolRounds = 4, timeoutMs = 60_000, logger = console, systemPrompt = SYSTEM_PROMPT, noDataPrompt = NO_DATA_PROMPT, styleProvider = null, retryNonEnglish = false }) {
+  constructor({ baseUrl, apiKey, model, reasoningEffort = "low", broker = null, chainTools = null, maxToolRounds = 4, timeoutMs = 60_000, logger = console, systemPrompt = SYSTEM_PROMPT, noDataPrompt = NO_DATA_PROMPT, styleProvider = null, retryNonEnglish = false }) {
     this.baseUrl = (baseUrl ?? "https://api.deepseek.com").replace(/\/$/, "");
     this.apiKey = apiKey;
     this.model = model ?? "deepseek-v4-pro";
@@ -42,6 +42,10 @@ export class LlmClient {
     // low | medium | high | xhigh | max.
     this.reasoningEffort = reasoningEffort;
     this.broker = broker;
+    // Answers "what trades on this chain", which the market-data tools cannot:
+    // they price tickers globally, and a global price is not an asset anyone
+    // here can buy.
+    this.chainTools = chainTools;
     this.maxToolRounds = maxToolRounds;
     this.timeoutMs = timeoutMs;
     this.logger = logger;
@@ -63,8 +67,12 @@ export class LlmClient {
   // Exposes every read-only Robinhood MCP tool in OpenAI function-calling
   // shape, discovered live so a Robinhood rename does not need a code change.
   async tools() {
-    if (!this.broker) return [];
     if (this.toolCache) return this.toolCache;
+    if (!this.broker) {
+      this.toolCache = this.chainTools?.definitions() ?? [];
+      this.readNames = new Set();
+      return this.toolCache;
+    }
     const available = await this.broker.listTools().catch(() => []);
     this.toolCache = available
       .filter((tool) => !WRITE_TOOL.test(tool.name))
@@ -77,6 +85,7 @@ export class LlmClient {
         }
       }));
     this.readNames = new Set(this.toolCache.map((tool) => tool.function.name));
+    if (this.chainTools) this.toolCache = [...this.chainTools.definitions(), ...this.toolCache];
     return this.toolCache;
   }
 
@@ -116,6 +125,11 @@ export class LlmClient {
 
   async runTool(call) {
     const name = call.function?.name;
+    if (this.chainTools?.handles(name)) {
+      let chainArgs = {};
+      try { chainArgs = JSON.parse(call.function.arguments || "{}"); } catch { /* keep empty */ }
+      return this.chainTools.run(name, chainArgs).catch((error) => `Error: ${String(error.message).slice(0, 200)}`);
+    }
     // The denylist is enforced at execution too, not just at advertisement:
     // a model hallucinating a write tool name gets an error, not an order.
     if (!this.readNames?.has(name) || WRITE_TOOL.test(name)) return `Error: ${name} is not available.`;

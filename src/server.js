@@ -29,6 +29,7 @@ import { DexRouter } from "./dex-router.js";
 import { AssetResolver } from "./asset-resolver.js";
 import { OnchainBroker } from "./onchain-broker.js";
 import { OnchainApi } from "./onchain-api.js";
+import { ChainTools } from "./chain-tools.js";
 
 // Key material must never reach a log line, so the process logger redacts
 // anything shaped like a private key or bearer token before it is written.
@@ -78,22 +79,12 @@ const gork = config.persona.name === "gork";
 const corpus = gork && config.persona.corpus.userId && config.appBearerToken
   ? new StyleCorpus({ bearerToken: config.appBearerToken, ...config.persona.corpus })
   : null;
-const llm = config.llm.enabled
-  ? new LlmClient({
-      ...config.llm,
-      broker: quoteSource,
-      ...(gork
-        ? { systemPrompt: GORK_SYSTEM_PROMPT, noDataPrompt: GORK_NO_DATA_PROMPT, styleProvider: corpus ? () => corpus.block() : null, retryNonEnglish: true }
-        : {})
-    })
-  : null;
-if (config.llm.enabled && !llm.configured()) throw new Error("LLM_ENABLED=true requires LLM_API_KEY");
-
-// Per-user wallets on Robinhood Chain. When enabled, every interacting user
-// gets a custodial wallet and buy intents fill from THEIR deposited funds —
-// the operator-account trading path above is bypassed for mentions.
+// Wallets, venues, and the chain tools come first: the answering model is
+// constructed with those tools, so they have to exist by then.
 let onchain = null;
 let onchainApi = null;
+let chainTools = null;
+
 if (config.onchain.enabled) {
   const vault = new WalletVault(config.onchain.walletEncKey, config.onchain.previousWalletEncKey);
   const chain = new ChainClient({ rpcUrl: config.onchain.rpcUrl });
@@ -111,10 +102,29 @@ if (config.onchain.enabled) {
     config: { ...config.onchain, persona: config.persona.name }
   });
   onchainApi = new OnchainApi({ config, store, vault, chain, onchain });
+  // The answering model gets a way to ask what actually trades here, so it
+  // stops quoting global prices for assets this chain does not have.
+  chainTools = new ChainTools({ resolver, dex });
   if (!onchainApi.oauthReady()) {
     console.warn("Onchain mode is on but X_CLIENT_ID is missing: the portfolio site will be read-only (no sign-in, withdraw, or key export).");
   }
 }
+
+const llm = config.llm.enabled
+  ? new LlmClient({
+      ...config.llm,
+      broker: quoteSource,
+      chainTools,
+      ...(gork
+        ? { systemPrompt: GORK_SYSTEM_PROMPT, noDataPrompt: GORK_NO_DATA_PROMPT, styleProvider: corpus ? () => corpus.block() : null, retryNonEnglish: true }
+        : {})
+    })
+  : null;
+if (config.llm.enabled && !llm.configured()) throw new Error("LLM_ENABLED=true requires LLM_API_KEY");
+
+// Per-user wallets on Robinhood Chain. When enabled, every interacting user
+// gets a custodial wallet and buy intents fill from THEIR deposited funds —
+// the operator-account trading path above is bypassed for mentions.
 
 const workers = config.bots.map((bot) => new MentionWorker({
   store,

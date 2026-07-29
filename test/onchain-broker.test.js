@@ -221,3 +221,30 @@ test("a pending ask plus a bare amount completes the original buy", async () => 
   assert.match(result.reply, /Bought/);
   assert.equal(swaps[0].amountIn, parseEther("0.0125"));
 });
+
+test("liquidity, not the explorer, decides which same-ticker token is real", async () => {
+  const REAL = "0x3333333333333333333333333333333333333333";
+  const SCAM = "0x4444444444444444444444444444444444444444";
+  const { broker } = await makeBroker();
+  // The scam quotes a huge buy but nothing on the way back out, which is what
+  // a pool rigged to swallow funds looks like from the chain's side.
+  broker.dex.findBestRoute = async (tokenIn, tokenOut, amountIn) => {
+    if (tokenOut === SCAM) return { kind: "single", amountOut: amountIn * 1000n };
+    if (tokenIn === SCAM) return { kind: "single", amountOut: 1n };
+    if (tokenOut === REAL) return { kind: "single", amountOut: amountIn * 10n };
+    if (tokenIn === REAL) return { kind: "single", amountOut: amountIn / 10n };
+    return null;
+  };
+  const picked = await broker.pickByLiquidity([
+    { address: SCAM, symbol: "WOJ", priceUsd: 9 },
+    { address: REAL, symbol: "WOJ", priceUsd: 0.001 }
+  ]);
+  assert.equal(picked.address, REAL);
+});
+
+test("a ticker with no fillable pool is refused, not guessed at", async () => {
+  const { broker } = await makeBroker();
+  broker.dex.findBestRoute = async () => null;
+  const picked = await broker.pickByLiquidity([{ address: "0x5555555555555555555555555555555555555555", symbol: "GHOST" }]);
+  assert.equal(picked, null);
+});

@@ -61,11 +61,17 @@ export class AssetResolver {
     const official = pool.find((item) => item.is_verified_via_admin_panel && item.exchange_rate && /• Robinhood Token$/.test(item.name ?? ""));
     if (official) return this.entry(official, true);
 
-    // Everything else fails closed. Market cap is supply times price, and an
-    // attacker mints the supply and seeds the pool that sets the price, so
-    // ranking unverified tokens by it just hands the ticker to whoever fakes
-    // the biggest number. An unverified token must be named by its address.
-    return pool.length > 0 ? { unverified: true, symbol: term, count: pool.length } : null;
+    // No issuer-verified match: hand back the plausible candidates instead of
+    // picking one here. Market cap is supply times price and an attacker
+    // controls both, so the choice is made against real on-chain liquidity
+    // by the caller, which costs money to fake.
+    const candidates = pool
+      .filter((item) => item.exchange_rate)
+      .sort((a, b) => Number(b.circulating_market_cap ?? 0) - Number(a.circulating_market_cap ?? 0))
+      .slice(0, 4)
+      .map((item) => this.entry(item, false));
+    if (candidates.length === 0) return null;
+    return { unverified: true, symbol: term, candidates };
   }
 
   entry(item, official) {

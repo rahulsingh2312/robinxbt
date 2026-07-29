@@ -120,8 +120,21 @@ export class OnchainBroker {
     if (asset?.ambiguous) {
       return { reply: `Several tokens trade as ${term} and none is clearly the real one. Reply with the contract address and I’ll use exactly that.` };
     }
+    // An unverified ticker is decided by the pools, not by the explorer's
+    // numbers: whichever candidate actually holds liquidity at this size wins.
+    // Faking that costs an attacker real money, and anything they do fund can
+    // be sold back out — which is the property the round-trip check verifies.
     if (asset?.unverified) {
-      return { reply: `${asset.symbol} on Robinhood Chain isn’t an issuer-verified token, and tickers are free to fake. Reply with the exact contract address if you still want it.` };
+      const vetted = await this.pickByLiquidity(asset.candidates);
+      if (!vetted) {
+        // Distinguish "I don't trust it" from "the chain can't fill it".
+        const named = asset.candidates[0];
+        return {
+          reply: `${asset.symbol} trades, but not through the pools I can reach: a buy right now would lose most of its value on the way in. I'd be burning your money, so no. Ask me for something with real on-chain depth, like a stock token.`,
+          detail: named?.address
+        };
+      }
+      asset = vetted;
     }
     if (!asset) {
       return { reply: `Couldn’t find ${term} on Robinhood Chain. If it’s a memecoin, reply with its contract address.` };
@@ -266,6 +279,28 @@ export class OnchainBroker {
     // No address fragments here either — X's crypto-address filter is the
     // reason the funding reply already points at the site.
     return `Your wallet: ${parts.join(", ")}${more}. Full view, deposit address, and controls at the portfolio link in bio.`;
+  }
+
+  // Ranks same-ticker candidates by what the chain says rather than what the
+  // explorer claims: quote a real buy, then quote selling it straight back.
+  // A token with no pool, or one rigged to swallow buys, scores nothing.
+  async pickByLiquidity(candidates) {
+    // Deliberately small (~$2): this probe only has to tell a real pool from
+    // an empty one. Sizing it like a real order would fail honest but shallow
+    // memecoin pools, where a $20 trade legitimately moves the price.
+    const probeWei = 10n ** 15n;
+    const scored = await Promise.all(candidates.map(async (candidate) => {
+      const inbound = await this.dex.findBestRoute(NATIVE, candidate.address, probeWei).catch(() => null);
+      if (!inbound || inbound.amountOut === 0n) return null;
+      const outbound = await this.dex.findBestRoute(candidate.address, NATIVE, inbound.amountOut).catch(() => null);
+      if (!outbound || outbound.amountOut === 0n) return null;
+      const retained = Number(outbound.amountOut) / Number(probeWei);
+      // A round trip always pays two pool fees, so the bar allows for those
+      // plus a little impact. Below it, the pool is a trap rather than a market.
+      return retained > 0.85 ? { candidate, retained } : null;
+    }));
+    const live = scored.filter(Boolean).sort((a, b) => b.retained - a.retained);
+    return live[0]?.candidate ?? null;
   }
 
   // Airdropped spam is the default state of any open chain: unpriced tokens

@@ -52,3 +52,14 @@ test("contract addresses resolve directly via the token endpoint", async () => {
   assert.equal(asset.symbol, "PEPE");
   assert.equal(asset.via, "address");
 });
+
+test("an unverified ticker returns candidates for on-chain vetting", async () => {
+  // The explorer picks nobody; it only proposes. Liquidity decides, because
+  // market cap is supply times price and an attacker owns both.
+  const real = { ...FAKE, symbol: "WOJ", address_hash: "0x3333333333333333333333333333333333333333", exchange_rate: "0.001", circulating_market_cap: "5000000" };
+  const fake = { ...FAKE, symbol: "WOJ", address_hash: "0x4444444444444444444444444444444444444444", exchange_rate: "9", circulating_market_cap: "999000000000" };
+  const result = await resolverReturning([real, fake]).resolve("WOJ");
+  assert.equal(result.unverified, true);
+  assert.equal(result.candidates.length, 2);
+  assert.ok(result.candidates.every((candidate) => candidate.address));
+});

@@ -14,7 +14,7 @@ const SYSTEM_PROMPT = `You read one message sent to a trading bot and report wha
 
 Return ONLY a JSON object with these keys:
 - "action": "buy" if they are telling the bot to purchase something now, "sell" if telling it to sell, "amount_only" if they are just stating a dollar amount (usually answering "how much?"), otherwise "none".
-- "asset": what they called the thing to trade, exactly as written (a ticker like "NVDA", a name like "cash cat", or a 0x contract address). Use null if they did not name one.
+- "asset": the tradable symbol. If they name a company, return its stock ticker ("tesla" -> "TSLA", "apple" -> "AAPL", "nvidia" -> "NVDA", "google" -> "GOOG"). If they name a coin, return it as written without spaces ("cash cat" -> "CASHCAT"). A 0x contract address is returned unchanged. Use null if they did not name anything to trade.
 - "amount_usd": the dollar amount as a number, converting words ("a buck fifty" -> 1.5, "twenty bucks" -> 20, "half a dollar" -> 0.5). Use null if no amount is stated.
 - "refers_to_context": true if the asset is only identifiable from the conversation (they said "it", "that coin", "the one you mentioned").
 
@@ -22,10 +22,23 @@ Rules:
 - Questions are not orders. "should i buy nvda?" and "would you buy $50 of nvda?" are both "none".
 - Hypotheticals, jokes, and figures of speech are "none". "grab a coffee, that'll be $5" is "none".
 - A currency word is never the asset. In "1.5 dollar of cashcat" the asset is "cashcat".
-- Never invent an asset the sender did not mention.
+- Never invent an asset the sender did not mention. Drop trailing words like "stock", "coin", or "token" from the symbol.
 - Output the JSON object and nothing else.`;
 
 const MAX_REASONABLE_USD = 1_000_000;
+
+// People say "apple", not "AAPL". The ticker cannot be derived from the word
+// by letters alone, and loosening the anti-injection check to allow it would
+// let far too much through, so the common names are simply listed. Anything
+// not here still has to be justified by the message itself.
+const COMPANY_TICKERS = new Map(Object.entries({
+  apple: "AAPL", tesla: "TSLA", nvidia: "NVDA", google: "GOOG", alphabet: "GOOG",
+  microsoft: "MSFT", amazon: "AMZN", meta: "META", facebook: "META", netflix: "NFLX",
+  robinhood: "HOOD", coinbase: "COIN", palantir: "PLTR", amd: "AMD", intel: "INTC",
+  broadcom: "AVGO", tsmc: "TSM", walmart: "WMT", disney: "DIS", boeing: "BA",
+  starbucks: "SBUX", uber: "UBER", airbnb: "ABNB", spotify: "SPOT", shopify: "SHOP",
+  micron: "MU", qualcomm: "QCOM", oracle: "ORCL", salesforce: "CRM", adobe: "ADBE"
+}));
 
 export class IntentReader {
   constructor({ llm = null, logger = console, timeoutMs = 12_000 } = {}) {
@@ -80,7 +93,17 @@ export class IntentReader {
     // The asset has to appear in what they actually wrote, unless they were
     // pointing at the conversation ("buy it"). Without this a model slip, or
     // an instruction smuggled into a quoted tweet, could name its own token.
-    if (term && !parsed.refers_to_context && !mentions(text, term)) {
+    // A company name legitimately produces a ticker that is not in the text
+    // ("tesla" -> TSLA), so a short symbol whose letters all appear in the
+    // message, in order, counts as derived from it rather than invented.
+    // A named company legitimately yields a ticker that shares no letters with
+    // it, so a known name in the message vouches for its own ticker.
+    const namedCompany = companyTickerIn(text);
+    if (term && namedCompany && term === namedCompany) {
+      return { wantsBuy: action === "buy", amountUsd, term };
+    }
+    if (term && !parsed.refers_to_context && !mentions(text, term) && !derivedFrom(text, term)) {
+      if (namedCompany) return { wantsBuy: action === "buy", amountUsd, term: namedCompany };
       this.logger.warn(`Intent model proposed "${term}" which is absent from the message; ignoring it`);
       term = fallback?.term ?? null;
     }
@@ -103,6 +126,29 @@ function normalizeTerm(value) {
   if (!/^[A-Za-z][A-Za-z0-9]{0,14}$/.test(compact)) return null;
   if (/^(usd|dollars?|dollers?|bucks?|money|cash|it|that|this|some)$/i.test(compact)) return null;
   return compact.toUpperCase();
+}
+
+// The first well-known company name appearing in the message, as a ticker.
+function companyTickerIn(text) {
+  const words = String(text).toLowerCase().split(/[^a-z]+/);
+  for (const word of words) {
+    const ticker = COMPANY_TICKERS.get(word);
+    if (ticker) return ticker;
+  }
+  return null;
+}
+
+// Every letter of the symbol appears, in order, inside a single word of the
+// message: "tesla" yields TSLA, but an unrelated token cannot be smuggled in.
+function derivedFrom(text, term) {
+  const symbol = term.toLowerCase();
+  if (symbol.length > 5) return false;
+  return String(text).toLowerCase().split(/[^a-z]+/).some((word) => {
+    if (word.length < symbol.length) return false;
+    let index = 0;
+    for (const letter of word) if (letter === symbol[index]) index += 1;
+    return index === symbol.length;
+  });
 }
 
 // "cash cat" in the message should satisfy an asset of "cashcat", so both

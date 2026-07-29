@@ -144,7 +144,15 @@ export class MentionWorker {
     // Checked before the model runs, so a capped mention costs nothing.
     const capped = await this.cappedReason(post.author_id);
     if (capped) {
-      this.logger.warn(`Skipping mention ${post.id}: ${capped}`);
+      this.logger.warn(`Capped mention ${post.id}: ${capped}`);
+      // Silence reads as a broken bot. Say it once per person per window, then
+      // go quiet, so the cap cannot be turned into unlimited replies.
+      if (capped.startsWith("cap of") && !this.warnedCapped?.has(String(post.author_id))) {
+        this.warnedCapped ??= new Set();
+        this.warnedCapped.add(String(post.author_id));
+        setTimeout(() => this.warnedCapped.delete(String(post.author_id)), 3_600_000).unref?.();
+        return this.sendReply(post, `You've hit my hourly reply limit. Give it an hour and I'll pick back up, or check your portfolio in the meantime, link in bio.`, post.username ?? "there");
+      }
       return;
     }
     const username = post.username ?? "there";
@@ -159,6 +167,11 @@ export class MentionWorker {
     this.pendingOnchainBuy = null;
     const reply = await this.commandReply(post.text, username, post);
     if (reply === null) return;
+    return this.sendReply(post, reply, username);
+  }
+
+  // Posts a reply and records everything that depends on having sent it.
+  async sendReply(post, reply, username) {
     if (this.bot.dryRun) {
       await this.recordReply(post.author_id);
       this.logger.info(`[dry run] reply to ${post.id}: ${reply}`);

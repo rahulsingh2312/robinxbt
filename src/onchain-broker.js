@@ -162,10 +162,14 @@ export class OnchainBroker {
     }
 
     // Probe for a live market BEFORE any funding ask: a token that resolves
-    // but has no pool must never cause someone to deposit ETH for a buy that
-    // can only fail. Probing from ETH covers USDG-quoted pools too, because
-    // route discovery includes the two-hop through USDG.
-    const probe = await this.dex.findBestRoute(NATIVE, asset.address, 10n ** 15n);
+    // but has no pool must never cause someone to deposit for a buy that can
+    // only fail. Both quote currencies count, because memecoins trade against
+    // ETH and stock tokens against USDG, and the wallet converts either way.
+    const probes = await Promise.all([
+      this.dex.findBestRoute(NATIVE, asset.address, 10n ** 15n).catch(() => null),
+      this.dex.findBestRoute(this.dex.addresses.usdg, asset.address, 1_000_000n).catch(() => null)
+    ]);
+    const probe = probes.find(Boolean) ?? null;
     if (!probe) {
       return { reply: `${asset.symbol} exists on Robinhood Chain but has no tradable market right now, so I can’t buy it.` };
     }
@@ -202,17 +206,29 @@ export class OnchainBroker {
     // USDG only pays directly when a USDG pool for this token exists. Most
     // memecoins are quoted in ETH, so otherwise the dollars are converted to
     // ETH first and the buy happens from there.
-    const usdgDirect = usdgBalance >= usdgUnits
-      ? await this.dex.findBestRoute(usdgAddress, asset.address, usdgUnits).catch(() => null)
-      : null;
+    // Which currencies can actually reach this token. Most memecoins are
+    // quoted in ETH and most stock tokens in USDG, so the wallet has to be
+    // willing to convert: a wallet holding only ETH still cannot touch AAPL
+    // without buying dollars first, and vice versa.
+    const [ethPool, usdgPool] = await Promise.all([
+      this.dex.findBestRoute(NATIVE, asset.address, wantWei).catch(() => null),
+      this.dex.findBestRoute(usdgAddress, asset.address, usdgUnits).catch(() => null)
+    ]);
+
+    const hasUsdg = usdgBalance >= usdgUnits && ethBalance >= gasReserve;
+    const hasEth = ethBalance >= wantWei + gasReserve;
 
     let spend = null;
-    if (usdgDirect && ethBalance >= gasReserve) {
+    if (usdgPool && hasUsdg) {
       spend = { tokenIn: usdgAddress, amountIn: usdgUnits, label: `$${amountUsd} USDG` };
-    } else if (ethBalance >= wantWei + gasReserve) {
+    } else if (ethPool && hasEth) {
       spend = { tokenIn: NATIVE, amountIn: wantWei, label: `~${formatEthAmount(amountEth)} ETH` };
-    } else if (usdgBalance >= usdgUnits && ethBalance >= gasReserve) {
-      spend = { tokenIn: usdgAddress, amountIn: usdgUnits, viaEth: true, label: `$${amountUsd} USDG` };
+    } else if (ethPool && hasUsdg) {
+      // Dollars in the wallet, but the token only trades against ETH.
+      spend = { tokenIn: usdgAddress, amountIn: usdgUnits, convertTo: NATIVE, label: `$${amountUsd} USDG` };
+    } else if (usdgPool && hasEth) {
+      // ETH in the wallet, but the token only trades against dollars.
+      spend = { tokenIn: NATIVE, amountIn: wantWei, convertTo: usdgAddress, label: `~${formatEthAmount(amountEth)} ETH` };
     }
 
     // Dollars present but nothing to pay the network with: a precise ask
@@ -238,8 +254,12 @@ export class OnchainBroker {
       };
     }
 
-    // Quote the actual size once, then guard and execute on that same route.
-    const route = await this.dex.findBestRoute(spend.tokenIn, asset.address, spend.amountIn);
+    // Quote, guard, and execute against the currency that will actually buy
+    // the token. On the convert-first path that is ETH, not the USDG being
+    // sold to obtain it, so the pool being checked is the pool being used.
+    const buyWith = spend.convertTo ?? spend.tokenIn;
+    const buyAmount = spend.convertTo === NATIVE ? wantWei : spend.convertTo ? usdgUnits : spend.amountIn;
+    const route = await this.dex.findBestRoute(buyWith, asset.address, buyAmount);
     if (!route) {
       return { reply: `${asset.symbol} has no tradable market at that size right now, so I can’t buy it.` };
     }
@@ -252,11 +272,11 @@ export class OnchainBroker {
 
     // Sell the position straight back to see what the pool would give: this
     // catches honeypots and rigged depth even for tokens nobody has priced.
-    const roundTrip = await this.dex.findBestRoute(asset.address, spend.tokenIn, route.amountOut).catch(() => null);
+    const roundTrip = await this.dex.findBestRoute(asset.address, buyWith, route.amountOut).catch(() => null);
     if (!roundTrip || roundTrip.amountOut === 0n) {
       return { reply: `${asset.symbol} can be bought but not sold back right now, which is how honeypots work. Skipping it.` };
     }
-    const roundTripLossBps = Math.round((1 - Number(roundTrip.amountOut) / Number(spend.amountIn)) * 10000);
+    const roundTripLossBps = Math.round((1 - Number(roundTrip.amountOut) / Number(buyAmount)) * 10000);
     // A round trip pays the pool fee twice and crosses the spread twice, so
     // the fair comparison is roughly double the one-way budget. Past that the
     // exit is thin, which is worth saying out loud but is not by itself a
@@ -300,6 +320,7 @@ export class OnchainBroker {
     const spendUsd = spend.tokenIn === NATIVE
       ? (Number(spend.amountIn) / 1e18) * ethUsd
       : Number(spend.amountIn) / 10 ** usdgDecimals;
+
     if (spendUsd > this.config.maxOrderUsd * 1.05) {
       return { reply: `Pricing looks off right now (that would spend about $${Math.round(spendUsd)} for a $${amountUsd} order), so I'm not sending it.` };
     }
@@ -312,14 +333,27 @@ export class OnchainBroker {
     // No direct USDG pool: sell the dollars for ETH first, then buy with what
     // that produced. Two proven single-hop swaps beat one exotic route.
     let result;
-    if (spend.viaEth) {
-      const toEth = await this.dex.swap(signer, usdgAddress, NATIVE, spend.amountIn, { slippageBps: this.config.maxSlippageBps });
-      const funded = await this.chain.getEthBalance(wallet.address, { fresh: true });
-      const buyWei = funded > gasReserve ? funded - gasReserve : 0n;
-      if (buyWei <= 0n) {
-        return { reply: `Converted your USDG to ETH but there's nothing left for gas. Send a little ETH and I'll finish the buy.`, txHash: toEth.hash };
+    if (spend.convertTo) {
+      // Two proven single-hop swaps: turn the funds into the currency this
+      // token actually trades against, then buy with everything that produced
+      // (minus the gas ETH must keep back).
+      const converted = await this.dex.swap(signer, spend.tokenIn, spend.convertTo, spend.amountIn, {
+        slippageBps: this.config.maxSlippageBps
+      });
+      let buyAmountIn;
+      if (spend.convertTo === NATIVE) {
+        const funded = await this.chain.getEthBalance(wallet.address, { fresh: true });
+        buyAmountIn = funded > gasReserve ? funded - gasReserve : 0n;
+      } else {
+        buyAmountIn = (await this.chain.getTokenBalance(spend.convertTo, wallet.address)).raw;
       }
-      result = await this.dex.swap(signer, NATIVE, asset.address, buyWei, { slippageBps });
+      if (buyAmountIn <= 0n) {
+        return {
+          reply: `Converted your funds but there's nothing left to buy with. Send a little more and I'll finish it.`,
+          txHash: converted.hash
+        };
+      }
+      result = await this.dex.swap(signer, spend.convertTo, asset.address, buyAmountIn, { slippageBps });
     } else {
       result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn, { route, slippageBps });
     }

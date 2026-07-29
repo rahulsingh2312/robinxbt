@@ -10,7 +10,8 @@
     "test": "node --test",
     "wallets:rewrap": "node --env-file-if-exists=.env src/rewrap-wallets.js",
     "db:migrate": "node --env-file-if-exists=.env src/migrate-to-postgres.js",
-    "db:backup": "node --env-file-if-exists=.env src/backup-db.js"
+    "db:backup": "node --env-file-if-exists=.env src/backup-db.js",
+    "sim:users": "node --env-file-if-exists=.env test/manual/simulate-users.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

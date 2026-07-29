@@ -78,3 +78,31 @@ test("a sell request is recognized and routed away from buying", async () => {
   assert.equal(intent.wantsSell, true);
   assert.equal(intent.wantsBuy, false);
 });
+
+test("a company name resolves to its ticker", async () => {
+  // "tesla" never contains the literal string "TSLA", but every letter is
+  // there in order, so the ticker is derived rather than invented.
+  const reader = readerReturning({ action: "buy", asset: "TSLA", amount_usd: 5, refers_to_context: false });
+  const intent = await reader.read("@bot get me 5 dollars of tesla stock", "bot");
+  assert.equal(intent.term, "TSLA");
+});
+
+test("an unrelated ticker is still refused", async () => {
+  const reader = readerReturning({ action: "buy", asset: "XYZQ", amount_usd: 5, refers_to_context: false });
+  const intent = await reader.read("@bot buy 5 dollars of tesla stock", "bot");
+  assert.notEqual(intent.term, "XYZQ");
+});
+
+test("a well-known company name yields its ticker", async () => {
+  // "apple" and "AAPL" share almost no letters, so this cannot come from the
+  // letter check; the name itself is what vouches for the ticker.
+  const reader = readerReturning({ action: "buy", asset: "AAPL", amount_usd: 5, refers_to_context: false });
+  const intent = await reader.read("@bot buy 5 dollars worth of apple", "bot");
+  assert.equal(intent.term, "AAPL");
+});
+
+test("a company name does not license an unrelated ticker", async () => {
+  const reader = readerReturning({ action: "buy", asset: "SCAMX", amount_usd: 5, refers_to_context: false });
+  const intent = await reader.read("@bot buy 5 dollars worth of apple", "bot");
+  assert.equal(intent.term, "AAPL");
+});

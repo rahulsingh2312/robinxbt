@@ -349,3 +349,59 @@ test("an unverified ticker vetted by liquidity goes on to fill", async () => {
   assert.equal(swaps.length, 1);
   assert.match(result.reply, /Bought/);
 });
+
+test("a USDG buy with no USDG pool converts to ETH and checks the ETH pool", async () => {
+  // The convert-first path used to look for a USDG pool for the token, which
+  // by definition does not exist, and refuse its own plan.
+  const TOKEN = "0x7777777777777777777777777777777777777777";
+  const { broker, swaps } = await makeBroker({
+    balanceEth: 0.0004,
+    balanceUsdg: 5,
+    resolveTo: { address: TOKEN, symbol: "MEME", name: "Meme", official: false, priceUsd: null }
+  });
+  broker.dex.findBestRoute = async (tokenIn, tokenOut) => {
+    if (tokenIn === USDG && tokenOut === TOKEN) return null; // no direct USDG pool
+    return { kind: "single", amountOut: 10n ** 18n };
+  };
+  broker.chain.getTokenBalance = async () => ({ raw: 5_000_000n });
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 2, term: TOKEN }, parentText: "", dryRun: false
+  });
+  assert.match(result.reply, /Bought/);
+  // First swap sells the dollars, second buys the token with the proceeds.
+  assert.equal(swaps[0].tokenIn, USDG);
+  assert.equal(swaps[1].token, TOKEN);
+});
+
+test("an ETH wallet can still buy a token that only trades against USDG", async () => {
+  // Stock tokens are quoted in dollars, so a wallet holding only ETH has to
+  // buy USDG first or those tokens are simply unreachable.
+  const STOCK = "0x8888888888888888888888888888888888888888";
+  const { broker, swaps } = await makeBroker({
+    balanceEth: 1,
+    balanceUsdg: 0,
+    resolveTo: { address: STOCK, symbol: "AAPL", name: "Apple", official: true, priceUsd: 338 }
+  });
+  // Value-consistent quotes: $50 buys 50 USDG, which buys 0.148 AAPL at $338,
+  // and selling that back returns about $49.
+  broker.dex.findBestRoute = async (tokenIn, tokenOut) => {
+    const NATIVE_ADDRESS = "0x0000000000000000000000000000000000000000";
+    if (tokenIn === NATIVE_ADDRESS && tokenOut === STOCK) return null;
+    if (tokenOut === USDG) return { kind: "single", amountOut: 50_000_000n };
+    if (tokenOut === STOCK) return { kind: "single", amountOut: 147_928_994_082_840_236n };
+    return { kind: "single", amountOut: 49_000_000n };
+  };
+  // Empty of dollars when the plan is made, holding them after the first swap.
+  let converted = false;
+  broker.chain.getTokenBalance = async () => ({ raw: converted ? 50_000_000n : 0n });
+  const realSwap = broker.dex.swap;
+  broker.dex.swap = async (...args) => { converted = true; return realSwap(...args); };
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 50, term: "AAPL" }, parentText: "", dryRun: false
+  });
+  assert.match(result.reply, /Bought/);
+  assert.equal(swaps[0].token, USDG, "first swap should buy dollars");
+  assert.equal(swaps[1].token, STOCK, "second swap should buy the stock token");
+});

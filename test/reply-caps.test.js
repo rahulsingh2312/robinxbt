@@ -27,17 +27,21 @@ async function mention(instance, id, authorId) {
   await instance.handleMention({ id: String(id), text: "hello", author_id: String(authorId), username: "someone" });
 }
 
-test("replies to one author stop at the hourly cap", async () => {
+test("replies to one author stop at the hourly cap, after saying so once", async () => {
   const { instance, sent } = worker({ perAuthorPerHour: 3 });
   for (let i = 0; i < 6; i += 1) await mention(instance, i, "loop-bot");
-  assert.equal(sent.length, 3);
+  // Three real answers plus a single "you hit the limit" notice. Silence would
+  // read as a broken bot; repeating the notice would defeat the cap.
+  assert.equal(sent.length, 4);
+  assert.match(sent.at(-1).text, /hourly reply limit/);
 });
 
 test("a different author is unaffected by another author's cap", async () => {
   const { instance, sent } = worker({ perAuthorPerHour: 2 });
   for (let i = 0; i < 4; i += 1) await mention(instance, `a${i}`, "noisy");
   await mention(instance, "b1", "someone-else");
-  assert.equal(sent.length, 3);
+  // Two answers plus one notice for the noisy author, then a normal reply.
+  assert.equal(sent.length, 4);
   assert.equal(sent.at(-1).id, "b1");
 });
 

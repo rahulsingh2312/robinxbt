@@ -122,6 +122,12 @@ export class OnchainBroker {
     // An asset lifted from someone else's tweet is named in the reply, so the
     // buyer can see exactly what their money went into.
     const borrowed = Boolean(contextTerm && !contextFromBot);
+    // A contract address names one exact contract, so there is nothing left
+    // to guess and nothing for a guard to protect against being wrong about.
+    // This is a memecoin bot: when the address is on the table, the trade
+    // goes through and the reply reports what it cost. Ticker buys keep every
+    // guard, because a ticker is a name anyone can claim.
+    const explicitAddress = /^0x[0-9a-fA-F]{40}$/.test(String(term ?? ""));
     if (!term) {
       return { reply: `Tell me what to buy: a ticker like $NVDA or a contract address, plus a dollar amount.` };
     }
@@ -134,7 +140,13 @@ export class OnchainBroker {
     // Faking that costs an attacker real money, and anything they do fund can
     // be sold back out — which is the property the round-trip check verifies.
     if (asset?.unverified) {
-      const vetted = await this.pickByLiquidity(asset.candidates);
+      // Size the check to what they are actually spending: a pool that cannot
+      // take $20 may be entirely fine for $1.40.
+      const intendedUsd = intent.amountUsd ?? pendingBuy?.amountUsd ?? null;
+      const probeWei = intendedUsd
+        ? usdToWei(intendedUsd, await this.dex.ethUsdPrice().catch(() => 2000))
+        : 10n ** 15n;
+      const vetted = await this.pickByLiquidity(asset.candidates, probeWei);
       if (!vetted) {
         // Distinguish "I don't trust it" from "the chain can't fill it".
         const named = asset.candidates[0];
@@ -237,9 +249,16 @@ export class OnchainBroker {
     }
     const roundTripLossBps = Math.round((1 - Number(roundTrip.amountOut) / Number(spend.amountIn)) * 10000);
     // A round trip pays the pool fee twice and crosses the spread twice, so
-    // the fair comparison is roughly double the one-way budget.
-    if (roundTripLossBps > budget * 2 + 100) {
-      return { reply: `${asset.symbol} would lose ${(roundTripLossBps / 100).toFixed(1)}% buying in and selling back out. That pool is too thin to fill $${amountUsd} safely, so I'm not doing it.` };
+    // the fair comparison is roughly double the one-way budget. Past that the
+    // exit is thin, which is worth saying out loud but is not by itself a
+    // reason to refuse: what the buyer pays going IN is judged below, and
+    // people knowingly buy illiquid things. Only a pool that gives back almost
+    // nothing is refused, because that is a honeypot rather than a market.
+    const exitWarning = roundTripLossBps > budget * 2 + 100
+      ? ` Heads up: exit liquidity is thin, selling back right now would cost about ${(roundTripLossBps / 100).toFixed(0)}%.`
+      : "";
+    if (roundTripLossBps > 8000 && !explicitAddress) {
+      return { reply: `${asset.symbol} takes money in and gives almost nothing back out, which is what a honeypot looks like. Not buying it for you.` };
     }
 
     // One-way impact against the indexed price, when there is one to compare
@@ -249,7 +268,7 @@ export class OnchainBroker {
     if (asset.priceUsd) {
       const outValueUsd = (Number(route.amountOut) / 10 ** meta.decimals) * asset.priceUsd;
       impactBps = Math.max(0, Math.round((1 - outValueUsd / amountUsd) * 10000));
-      if (impactBps > budget) {
+      if (impactBps > budget && !explicitAddress) {
         return { reply: `Liquidity for ${asset.symbol} is too thin: a $${amountUsd} buy would lose ${(impactBps / 100).toFixed(1)}% to price impact. Not doing that to you.` };
       }
     }
@@ -257,10 +276,14 @@ export class OnchainBroker {
     // Slippage is the room between the quote and the fill, so it should track
     // how much this pool moves, not a single global guess. Too tight and every
     // memecoin buy reverts; too loose and a sandwich has somewhere to hide.
-    const slippageBps = Math.min(
-      this.config.maxSlippageBps,
-      Math.max(this.config.slippageBps, Math.round(impactBps / 2) + this.config.slippageBps)
-    );
+    // A named-contract buy is meant to land, so it gets the full slippage
+    // allowance rather than one derived from a pool it may barely move.
+    const slippageBps = explicitAddress
+      ? this.config.maxSlippageBps
+      : Math.min(
+          this.config.maxSlippageBps,
+          Math.max(this.config.slippageBps, Math.round(impactBps / 2) + this.config.slippageBps)
+        );
 
     // Re-assert the cap against the real outlay: the ETH path sizes through a
     // spot quote, and a depressed quote would otherwise send more ETH than the
@@ -283,9 +306,13 @@ export class OnchainBroker {
     const provenance = borrowed && !asset.official ? ` (${asset.symbol} came from that tweet, not from me)` : "";
     // Say it out loud when the pool charged real money for the trade; silence
     // would leave the user to discover it in their balance.
-    const cost = impactBps >= 100 ? ` Cost you ${(impactBps / 100).toFixed(1)}% in price impact.` : "";
+    // A named contract is a decision already made, so the fill is reported
+    // plainly with no lecture attached. Ticker buys still surface what the
+    // pool charged, since the buyer never saw which pool they were getting.
+    const cost = !explicitAddress && impactBps >= 100 ? ` Cost you ${(impactBps / 100).toFixed(1)}% in price impact.` : "";
+    const warning = explicitAddress ? "" : exitWarning;
     return {
-      reply: `Bought ~${formatQty(filled)} ${asset.symbol} for $${amountUsd}${provenance}.${cost} It’s in your wallet. Check the portfolio link in bio to see and manage your assets.`,
+      reply: `Bought ~${formatQty(filled)} ${asset.symbol} for $${amountUsd}${provenance}.${cost}${warning} It’s in your wallet. Check the portfolio link in bio to see and manage your assets.`,
       txHash: result.hash
     };
   }
@@ -309,20 +336,21 @@ export class OnchainBroker {
   // Ranks same-ticker candidates by what the chain says rather than what the
   // explorer claims: quote a real buy, then quote selling it straight back.
   // A token with no pool, or one rigged to swallow buys, scores nothing.
-  async pickByLiquidity(candidates) {
-    // Deliberately small (~$2): this probe only has to tell a real pool from
-    // an empty one. Sizing it like a real order would fail honest but shallow
-    // memecoin pools, where a $20 trade legitimately moves the price.
-    const probeWei = 10n ** 15n;
+  // `probeWei` should be the amount actually about to be traded. A fixed probe
+  // gets this wrong in both directions: too large and it condemns a pool that
+  // handles the user's real (smaller) order perfectly well, too small and it
+  // blesses one that cannot absorb the order at all.
+  async pickByLiquidity(candidates, probeWei = 10n ** 15n) {
     const scored = await Promise.all(candidates.map(async (candidate) => {
       const inbound = await this.dex.findBestRoute(NATIVE, candidate.address, probeWei).catch(() => null);
       if (!inbound || inbound.amountOut === 0n) return null;
       const outbound = await this.dex.findBestRoute(candidate.address, NATIVE, inbound.amountOut).catch(() => null);
       if (!outbound || outbound.amountOut === 0n) return null;
       const retained = Number(outbound.amountOut) / Number(probeWei);
-      // A round trip always pays two pool fees, so the bar allows for those
-      // plus a little impact. Below it, the pool is a trap rather than a market.
-      return retained > 0.85 ? { candidate, retained } : null;
+      // Only rejects pools that cannot return most of the value at THIS size.
+      // Selecting between same-ticker candidates is the job here; how good the
+      // price is gets judged separately, against the order itself.
+      return retained > 0.6 ? { candidate, retained } : null;
     }));
     const live = scored.filter(Boolean).sort((a, b) => b.retained - a.retained);
     return live[0]?.candidate ?? null;

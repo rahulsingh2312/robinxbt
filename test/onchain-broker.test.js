@@ -288,3 +288,44 @@ test("a fill that cost real money says so in the reply", async () => {
   });
   assert.match(result.reply, /price impact/);
 });
+
+test("a contract address the buyer typed skips the price guards", async () => {
+  const ADDRESS = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
+  const { broker, swaps } = await makeBroker({
+    balanceEth: 1,
+    resolveTo: { address: ADDRESS, symbol: "CASHCAT", name: "Cash Cat", official: false, priceUsd: 0.048 }
+  });
+  // A pool that would normally be refused: terrible price in, thin exit.
+  broker.dex.findBestRoute = async (tokenIn, tokenOut, amountIn) =>
+    ({ kind: "single", amountOut: tokenIn === ADDRESS ? amountIn / 5n : 10n ** 18n });
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 50, term: ADDRESS }, parentText: "", dryRun: false
+  });
+  assert.equal(swaps.length, 1, "an explicitly named contract should still fill");
+  assert.match(result.reply, /Bought/);
+  // No lecture: they named the contract, the fill is just reported.
+  assert.doesNotMatch(result.reply, /charged you|heads up|price impact/i);
+});
+
+test("an address from someone else's tweet fills too, with the cost stated", async () => {
+  const ADDRESS = "0x020bfC650A365f8BB26819deAAbF3E21291018b4";
+  const { broker, swaps } = await makeBroker({
+    balanceEth: 1,
+    resolveTo: { address: ADDRESS, symbol: "SCAM", name: "Scam", official: false, priceUsd: 0.048 }
+  });
+  broker.dex.findBestRoute = async (tokenIn, tokenOut, amountIn) =>
+    ({ kind: "single", amountOut: tokenIn === ADDRESS ? amountIn / 100n : 10n ** 18n });
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    // The buyer said only "buy $50"; the address came from the tweet above.
+    intent: { wantsBuy: true, amountUsd: 50, term: null },
+    parentText: `ape into ${ADDRESS} now`,
+    contextFromBot: false,
+    dryRun: false
+  });
+  // A named contract is a decision, not a guess: it fills, and the reply is
+  // the same plain confirmation as any other buy.
+  assert.equal(swaps.length, 1);
+  assert.match(result.reply, /Bought/);
+});

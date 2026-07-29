@@ -161,7 +161,14 @@ function Statement({ portfolio, me, onChange, onSignOut, onRefresh }) {
       <section className="card stack" style={{ gap: 6 }}>
         <div className="spread" style={{ marginBottom: 8 }}>
           <h2>Holdings</h2>
-          <span className="pill">LIVE</span>
+          <span className="row" style={{ gap: 8 }}>
+            {portfolio.hiddenSpam > 0 && (
+              <span className="pill" title="Unsolicited or unpriced tokens are not shown">
+                {portfolio.hiddenSpam} SPAM HIDDEN
+              </span>
+            )}
+            <span className="pill">LIVE</span>
+          </span>
         </div>
         <div className="table-scroll">
           <table>

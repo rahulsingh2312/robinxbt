@@ -33,6 +33,9 @@ export function loadConfig() {
     },
     persona: loadPersona(),
     replyCaps: loadReplyCaps(),
+    // Reply chains to read for context. Hop one is free (X expands it with
+    // the mention); each further hop is a billed read.
+    contextDepth: Math.min(Math.max(Number(process.env.CONTEXT_THREAD_DEPTH ?? 3), 1), 6),
     onchain: loadOnchain()
   };
 }

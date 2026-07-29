@@ -165,6 +165,7 @@ export class OnchainApi {
       explorer: `${this.config.onchain.blockscoutBaseUrl}/address/${wallet.address}`,
       eth: { amount: ethAmount, valueUsd: ethUsd ? ethAmount * ethUsd : null },
       tokens: holdings,
+      hiddenSpam: holdings.hiddenCount ?? 0,
       totalUsd: holdings.reduce((sum, holding) => sum + (holding.valueUsd ?? 0), ethUsd ? ethAmount * ethUsd : 0)
     });
   }

@@ -257,25 +257,72 @@ export class OnchainBroker {
     return `Your wallet: ${parts.join(", ")}${more}. Full view, deposit address, and controls at the portfolio link in bio.`;
   }
 
+  // Airdropped spam is the default state of any open chain: unpriced tokens
+  // named after a phishing link, or a second "USDG" hoping to be mistaken for
+  // the real one. Holdings show what the wallet actually owns; the junk is
+  // counted and dropped.
   async fetchHoldings(address) {
     const base = this.config.blockscoutBaseUrl.replace(/\/$/, "");
     const response = await fetch(`${base}/api/v2/addresses/${address}/token-balances`);
     if (!response.ok) return [];
     const items = await response.json();
-    return items
+    const all = items
       .filter((item) => item.token?.type === "ERC-20" && item.value !== "0")
       .map((item) => {
-        const decimals = Number(item.token.decimals ?? 18);
+        const token = item.token;
+        const decimals = Number(token.decimals ?? 18);
         const amount = Number(item.value) / 10 ** decimals;
-        const price = item.token.exchange_rate ? Number(item.token.exchange_rate) : null;
-        return { symbol: item.token.symbol, name: item.token.name, address: item.token.address_hash ?? item.token.address, icon: item.token.icon_url ?? null, amount, priceUsd: price, valueUsd: price ? amount * price : null };
-      })
-      .sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
+        const price = token.exchange_rate ? Number(token.exchange_rate) : null;
+        return {
+          symbol: token.symbol ?? "?",
+          name: token.name ?? "",
+          address: token.address_hash ?? token.address,
+          icon: token.icon_url ?? null,
+          official: /• Robinhood Token$/.test(token.name ?? ""),
+          amount,
+          priceUsd: price,
+          valueUsd: price ? amount * price : null
+        };
+      });
+
+    const real = all.filter((holding) => !isSpamToken(holding));
+    // Two tokens claiming one ticker: the issuer-verified or priced one is the
+    // real holding, the other is an impersonation.
+    const bySymbol = new Map();
+    for (const holding of real.sort((a, b) => rank(b) - rank(a))) {
+      const key = holding.symbol.toUpperCase();
+      const kept = bySymbol.get(key);
+      if (!kept) bySymbol.set(key, holding);
+      else kept.duplicates = (kept.duplicates ?? 0) + 1;
+    }
+    const holdings = [...bySymbol.values()].sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
+    holdings.hiddenCount = all.length - holdings.length;
+    return holdings;
   }
 }
 
 // Scaled-integer division: floats cannot represent most USD/ETH ratios and
 // toFixed(18) would leak double-precision garbage into the wei amount.
+// Ranking for the duplicate-ticker contest: issuer-verified beats priced,
+// priced beats anything else.
+function rank(holding) {
+  return (holding.official ? 4 : 0) + (holding.priceUsd ? 2 : 0) + (holding.icon ? 1 : 0);
+}
+
+// Spam advertises itself: a name that is really a URL or an instruction, or a
+// token nobody has ever priced. Issuer-verified and priced tokens are always
+// kept, whatever they are called.
+const SPAM_TEXT = /(https?:|www\.|\.com|\.net|\.xyz|\.io\b|\.org|claim|airdrop|reward|voucher|visit |free |giveaway|winner|access|t\.me|discord|telegram)/i;
+
+function isSpamToken(holding) {
+  if (holding.official) return false;
+  if (SPAM_TEXT.test(`${holding.name} ${holding.symbol}`)) return true;
+  // Never priced by the explorer and never given an icon: nobody trades it,
+  // and it arrived unrequested.
+  if (!holding.priceUsd && !holding.icon) return true;
+  return false;
+}
+
 function usdToWei(amountUsd, ethUsd) {
   return (BigInt(Math.round(amountUsd * 1e6)) * 10n ** 18n) / BigInt(Math.round(ethUsd * 1e6));
 }

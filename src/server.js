@@ -112,6 +112,7 @@ const workers = config.bots.map((bot) => new MentionWorker({
   insiders,
   llm,
   replyCaps: config.replyCaps,
+  contextDepth: config.contextDepth,
   onchain
 }));
 

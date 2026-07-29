@@ -29,7 +29,11 @@ export class XClient {
   // expanded — the stream and webhook paths do not always carry `includes`.
   async getPost(postId) {
     const url = new URL(`${API_URL}/tweets/${postId}`);
-    url.searchParams.set("tweet.fields", "text,author_id");
+    // referenced_tweets comes back too, so the worker can walk further up a
+    // thread for context without a second round trip per hop.
+    url.searchParams.set("tweet.fields", "text,author_id,referenced_tweets,conversation_id");
+    url.searchParams.set("expansions", "author_id");
+    url.searchParams.set("user.fields", "username");
     const response = await fetch(url, { headers: this.headers("GET", url) });
     return this.read(response);
   }

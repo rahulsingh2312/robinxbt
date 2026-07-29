@@ -83,7 +83,11 @@ function loadOnchain() {
   const slippageBps = Number(process.env.ONCHAIN_SLIPPAGE_BPS ?? 50);
   const maxSlippageBps = Number(process.env.ONCHAIN_MAX_SLIPPAGE_BPS ?? 500);
   const maxPriceImpactBps = Number(process.env.ONCHAIN_MAX_PRICE_IMPACT_BPS ?? 150);
-  const maxPriceImpactUnverifiedBps = Number(process.env.ONCHAIN_MAX_PRICE_IMPACT_UNVERIFIED_BPS ?? 700);
+  // Deliberately wide: an unverified token is a memecoin, and paying tens of
+  // percent to get into a thin pool is a normal outcome there rather than a
+  // sign of anything wrong. Verified issuer tokens keep the tight budget,
+  // where a large impact really would mean something is broken.
+  const maxPriceImpactUnverifiedBps = Number(process.env.ONCHAIN_MAX_PRICE_IMPACT_UNVERIFIED_BPS ?? 5000);
   if (!Number.isFinite(maxOrderUsd) || maxOrderUsd <= 0) throw new Error("ONCHAIN_MAX_ORDER_USD must be a positive number");
   if (!Number.isInteger(slippageBps) || slippageBps < 1 || slippageBps > 3000) throw new Error("ONCHAIN_SLIPPAGE_BPS must be an integer between 1 and 3000");
   if (!Number.isInteger(maxSlippageBps) || maxSlippageBps < slippageBps || maxSlippageBps > 3000) throw new Error("ONCHAIN_MAX_SLIPPAGE_BPS must be an integer between ONCHAIN_SLIPPAGE_BPS and 3000");

@@ -131,7 +131,7 @@ export class OnchainBroker {
     if (!term) {
       return { reply: `Tell me what to buy: a ticker like $NVDA or a contract address, plus a dollar amount.` };
     }
-    const asset = await this.resolver.resolve(term);
+    let asset = await this.resolver.resolve(term);
     if (asset?.ambiguous) {
       return { reply: `Several tokens trade as ${term} and none is clearly the real one. Reply with the contract address and I’ll use exactly that.` };
     }
@@ -257,7 +257,7 @@ export class OnchainBroker {
     const exitWarning = roundTripLossBps > budget * 2 + 100
       ? ` Heads up: exit liquidity is thin, selling back right now would cost about ${(roundTripLossBps / 100).toFixed(0)}%.`
       : "";
-    if (roundTripLossBps > 8000 && !explicitAddress) {
+    if (roundTripLossBps > 9000 && !explicitAddress) {
       return { reply: `${asset.symbol} takes money in and gives almost nothing back out, which is what a honeypot looks like. Not buying it for you.` };
     }
 
@@ -347,10 +347,11 @@ export class OnchainBroker {
       const outbound = await this.dex.findBestRoute(candidate.address, NATIVE, inbound.amountOut).catch(() => null);
       if (!outbound || outbound.amountOut === 0n) return null;
       const retained = Number(outbound.amountOut) / Number(probeWei);
-      // Only rejects pools that cannot return most of the value at THIS size.
-      // Selecting between same-ticker candidates is the job here; how good the
-      // price is gets judged separately, against the order itself.
-      return retained > 0.6 ? { candidate, retained } : null;
+      // A memecoin can cost 50% to round trip and still be exactly what the
+      // buyer wants, so this only screens out pools that give back close to
+      // nothing. Choosing between same-ticker candidates is the job here; the
+      // best of them wins on retention rather than on a threshold.
+      return retained > 0.1 ? { candidate, retained } : null;
     }));
     const live = scored.filter(Boolean).sort((a, b) => b.retained - a.retained);
     return live[0]?.candidate ?? null;

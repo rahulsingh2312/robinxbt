@@ -14,7 +14,7 @@ const CONFIG = {
   slippageBps: 50,
   maxSlippageBps: 500,
   maxPriceImpactBps: 150,
-  maxPriceImpactUnverifiedBps: 700,
+  maxPriceImpactUnverifiedBps: 5000,
   blockscoutBaseUrl: "https://example.invalid"
 };
 const NVDA = { address: "0xd0601CE157Db5bdC3162BbaC2a2C8aF5320D9EEC", symbol: "NVDA", name: "NVIDIA • Robinhood Token", official: true, priceUsd: 197 };
@@ -326,6 +326,26 @@ test("an address from someone else's tweet fills too, with the cost stated", asy
   });
   // A named contract is a decision, not a guess: it fills, and the reply is
   // the same plain confirmation as any other buy.
+  assert.equal(swaps.length, 1);
+  assert.match(result.reply, /Bought/);
+});
+
+test("an unverified ticker vetted by liquidity goes on to fill", async () => {
+  // Exercises the whole path: resolver proposes candidates, liquidity picks
+  // one, and the buy proceeds with that choice.
+  const REAL = "0x3333333333333333333333333333333333333333";
+  const { broker, swaps } = await makeBroker({
+    balanceEth: 1,
+    resolveTo: { unverified: true, symbol: "WOJ", candidates: [{ address: REAL, symbol: "WOJ", name: "Wojak", official: false, priceUsd: 0.01 }] }
+  });
+  // $5 at $2000/ETH is 0.0025 ETH, and at $0.01 a token that is 500 tokens,
+  // so the pool returns 200000 token-units per wei in and 97% on the way back.
+  broker.dex.findBestRoute = async (tokenIn, tokenOut, amountIn) =>
+    ({ kind: "single", amountOut: tokenIn === REAL ? (amountIn * 97n) / (100n * 200_000n) : amountIn * 200_000n });
+  const result = await broker.handleBuy({
+    botUsername: "mybot", authorId: "1", username: "alice",
+    intent: { wantsBuy: true, amountUsd: 5, term: "WOJ" }, parentText: "", dryRun: false
+  });
   assert.equal(swaps.length, 1);
   assert.match(result.reply, /Bought/);
 });

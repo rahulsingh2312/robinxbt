@@ -26,8 +26,8 @@ export function parseBuyIntent(text, botUsername) {
   const amountUsd = parseUsdAmount(command.replace(/\b0x[0-9a-fA-F]{40}\b/g, " "));
   let term = address;
   if (!term) {
-    const afterVerb = command.match(/\b(?:buy|ape into|aping into)\b(?:\s+\$?[\d,.]+k?\s*(?:usd|dollars|bucks|worth)?\s*(?:of)?)?\s+\$?([A-Za-z][A-Za-z0-9]{0,14})\b/i)?.[1];
-    if (afterVerb && !/^(me|some|that|this|it|the|a|an|usd|dollars|bucks|worth|of)$/i.test(afterVerb)) term = afterVerb.toUpperCase();
+    const afterVerb = command.match(/\b(?:buy|ape into|aping into)\b(?:\s+\$?[\d,.]+k?\s*(?:usd|dollars?|dollers?|bucks?|worth)?\s*(?:of|worth of)?)?\s+\$?([A-Za-z][A-Za-z0-9]{0,14})\b/i)?.[1];
+    if (afterVerb && !/^(me|some|that|this|it|the|a|an|usd|dollars?|dollers?|bucks?|worth|of|for|in|into|please|pls|now)$/i.test(afterVerb)) term = afterVerb.toUpperCase();
     if (!term) {
       const cashtag = command.match(/\$([A-Za-z][A-Za-z0-9]{0,14})\b/)?.[1];
       if (cashtag && !/^\d/.test(cashtag)) term = cashtag.toUpperCase();
@@ -41,7 +41,7 @@ export function parseBuyIntent(text, botUsername) {
 
 // "$50", "50$", "$1.5k", "20 bucks" — replies rarely spell out "USD".
 export function parseUsdAmount(text) {
-  const match = String(text ?? "").match(/(?:\$\s?([\d,]+(?:\.\d+)?)\s*(k)?|([\d,]+(?:\.\d+)?)\s*(k)?\s*(?:\$|usd\b|dollars\b|bucks\b))/i);
+  const match = String(text ?? "").match(/(?:\$\s?([\d,]+(?:\.\d+)?)\s*(k)?|([\d,]+(?:\.\d+)?)\s*(k)?\s*(?:\$|usd\b|dollars?\b|bucks?\b|dollers?\b))/i);
   if (!match) return null;
   const raw = (match[1] ?? match[3]).replace(/,/g, "");
   const thousands = Boolean(match[2] ?? match[4]);

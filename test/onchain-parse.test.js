@@ -79,3 +79,19 @@ test("extractAssetTerms prefers addresses, then cashtags, and drops junk", () =>
   assert.ok(!terms.includes("NFA"));
   assert.ok(!terms.includes("LFG"));
 });
+
+test("currency words are never mistaken for the ticker", () => {
+  // Real tweet: "buy 1.5 dollar of cashcat" parsed the singular unit as the
+  // asset and the bot went looking for a token called DOLLAR.
+  for (const [text, amount, term] of [
+    ["@mybot i want you to buy 1.5 dollar of cashcat", 1.5, "CASHCAT"],
+    ["@mybot buy 1.5 dollars of cashcat", 1.5, "CASHCAT"],
+    ["@mybot buy 20 buck of pepe", 20, "PEPE"],
+    ["@mybot buy 5 usd of nvda", 5, "NVDA"],
+    ["@mybot buy cashcat for 1.5 dollar", 1.5, "CASHCAT"]
+  ]) {
+    const intent = parseBuyIntent(text, "mybot");
+    assert.equal(intent.amountUsd, amount, text);
+    assert.equal(intent.term, term, text);
+  }
+});

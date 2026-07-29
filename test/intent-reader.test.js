@@ -106,3 +106,24 @@ test("a company name does not license an unrelated ticker", async () => {
   const intent = await reader.read("@bot buy 5 dollars worth of apple", "bot");
   assert.equal(intent.term, "AAPL");
 });
+
+test("claiming the asset came from context does not excuse inventing one", async () => {
+  // Asked to buy $VIRTUAL, the model answered SOLANA with refers_to_context
+  // set, and the flag alone waved it through.
+  const reader = readerReturning({ action: "buy", asset: "SOLANA", amount_usd: 1, refers_to_context: true });
+  const intent = await reader.read("@bot i want you to buy 1 dollar of $VIRTUAL", "bot");
+  assert.equal(intent.term, "VIRTUAL");
+});
+
+test("an asset genuinely from the context is still allowed", async () => {
+  const reader = readerReturning({ action: "buy", asset: "NVDA", amount_usd: 20, refers_to_context: true });
+  const intent = await reader.read("@bot buy it, 20 bucks", "bot", { contextText: "NVDA looks strong here" });
+  assert.equal(intent.term, "NVDA");
+});
+
+test("a sell cannot invent its asset either", async () => {
+  const reader = readerReturning({ action: "sell", asset: "SOLANA", portion: 1, refers_to_context: true });
+  const intent = await reader.read("@bot sell my VIRTUAL", "bot");
+  assert.equal(intent.wantsSell, true);
+  assert.notEqual(intent.term, "SOLANA");
+});

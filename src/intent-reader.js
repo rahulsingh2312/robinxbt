@@ -44,6 +44,10 @@ const COMPANY_TICKERS = new Map(Object.entries({
 }));
 
 export class IntentReader {
+  groundTerm(term, text, contextText, refersToContext) {
+    return groundTermImpl(term, text, contextText, refersToContext, this.logger);
+  }
+
   constructor({ llm = null, logger = console, timeoutMs = 12_000 } = {}) {
     this.llm = llm;
     this.logger = logger;
@@ -58,7 +62,7 @@ export class IntentReader {
     try {
       const parsed = await this.askModel(text, botUsername, contextText);
       if (!parsed) return fallback;
-      return this.reconcile(parsed, fallback, text);
+      return this.reconcile(parsed, fallback, text, contextText);
     } catch (error) {
       // A model outage must never stop someone from trading; the patterns
       // still handle the common phrasings.
@@ -82,7 +86,7 @@ export class IntentReader {
 
   // The model's answer is a suggestion, not a decision. Anything it returns
   // that the message itself does not support is dropped.
-  reconcile(parsed, fallback, text) {
+  reconcile(parsed, fallback, text, contextText = null) {
     const action = String(parsed.action ?? "none").toLowerCase();
     if (action === "portfolio") return { wantsPortfolio: true, wantsBuy: false, amountUsd: null, term: null };
     if (action === "sell") {
@@ -90,7 +94,9 @@ export class IntentReader {
       return {
         wantsSell: true,
         wantsBuy: false,
-        term: normalizeTerm(parsed.asset) ?? companyTickerIn(text),
+        // Held to the same standard as a buy: the model may not name an asset
+        // that appears nowhere in what was actually said.
+        term: this.groundTerm(normalizeTerm(parsed.asset), text, contextText, parsed.refers_to_context) ?? fallback?.term ?? null,
         amountUsd: Number.isFinite(Number(parsed.amount_usd)) && Number(parsed.amount_usd) > 0 ? Number(parsed.amount_usd) : null,
         portion: Number.isFinite(portion) && portion > 0 && portion <= 1 ? portion : 1
       };
@@ -115,11 +121,16 @@ export class IntentReader {
     if (term && namedCompany && term === namedCompany) {
       return { wantsBuy: action === "buy", amountUsd, term };
     }
-    if (term && !parsed.refers_to_context && !mentions(text, term) && !derivedFrom(text, term)) {
+    // "refers_to_context" is the model's own claim, so it cannot excuse the
+    // check — it only widens where the asset may come from. Asked to buy
+    // $VIRTUAL, the model once answered SOLANA and set this flag, and the
+    // flag alone let it through.
+    const grounded = this.groundTerm(term, text, contextText, parsed.refers_to_context);
+    if (term && !grounded) {
       if (namedCompany) return { wantsBuy: action === "buy", amountUsd, term: namedCompany };
       this.logger.warn(`Intent model proposed "${term}" which is absent from the message; ignoring it`);
-      term = fallback?.term ?? null;
     }
+    term = grounded ?? fallback?.term ?? null;
 
     return {
       wantsBuy: action === "buy",
@@ -127,6 +138,17 @@ export class IntentReader {
       term: term ?? fallback?.term ?? null
     };
   }
+}
+
+// Returns the term only when the conversation actually supports it. The
+// model's "it came from the context" claim widens where we look; it never
+// removes the requirement.
+function groundTermImpl(term, text, contextText, refersToContext, logger) {
+  if (!term) return null;
+  const sources = refersToContext ? `${text}\n${contextText ?? ""}` : text;
+  if (mentions(sources, term) || derivedFrom(sources, term)) return term;
+  const named = companyTickerIn(sources);
+  return named === term ? term : null;
 }
 
 // Tickers, names, and addresses all arrive as free text; normalize to what the

@@ -133,3 +133,25 @@ test("an empty wallet says so plainly", async () => {
   const reply = await broker.describePortfolio("mybot", "1", "alice");
   assert.match(reply, /Nothing in your wallet yet/);
 });
+
+test("a token the explorer never priced is a holding, not spam", async () => {
+  // The 4,130 IN someone had just bought through the bot were being hidden as
+  // spam because the explorer had no price for the token.
+  const { broker } = await makeBroker();
+  broker.fetchHoldings = OnchainBroker.prototype.fetchHoldings.bind(broker);
+  global.fetch = async (url) => {
+    if (String(url).includes("dexscreener")) {
+      return { ok: true, json: async () => ({ pairs: [
+        { chainId: "robinhood", baseToken: { address: "0x6f572e8020247324d7b9dc15c297a32e4187df1c" }, liquidity: { usd: 67497 }, priceUsd: "0.0002368" }
+      ] }) };
+    }
+    return { ok: true, json: async () => ([
+      { value: "4130000000000000000000", token: { type: "ERC-20", symbol: "IN", name: "INSIDERS.BOT by Virtuals", decimals: 18, address_hash: "0x6F572E8020247324D7B9dc15c297a32e4187dF1C" } },
+      { value: "1000000000000000000", token: { type: "ERC-20", symbol: "CLAIM", name: "visit rh-airdrop.xyz", decimals: 18, address_hash: "0xdead" } }
+    ]) };
+  };
+  const holdings = await broker.fetchHoldings("0xwallet");
+  assert.equal(holdings.length, 1, "the bought token should survive, the airdrop should not");
+  assert.equal(holdings[0].symbol, "IN");
+  assert.ok(holdings[0].valueUsd > 0.9, "and it should carry a value");
+});

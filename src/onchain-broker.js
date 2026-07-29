@@ -545,6 +545,41 @@ export class OnchainBroker {
     };
   }
 
+  // Fills in price and liquidity for holdings the explorer never priced, in
+  // one batched lookup against the pair index.
+  async priceUnknownHoldings(holdings) {
+    const unknown = holdings.filter((holding) => !holding.priceUsd).slice(0, 25);
+    if (unknown.length === 0) return;
+    try {
+      const response = await fetch(
+        `https://api.dexscreener.com/latest/dex/tokens/${unknown.map((holding) => holding.address).join(",")}`,
+        { signal: AbortSignal.timeout(6_000) }
+      );
+      if (!response.ok) return;
+      const body = await response.json();
+      const best = new Map();
+      for (const pair of body.pairs ?? []) {
+        if (!String(pair.chainId ?? "").toLowerCase().includes("robinhood")) continue;
+        const address = String(pair.baseToken?.address ?? "").toLowerCase();
+        const liquidityUsd = Number(pair.liquidity?.usd ?? 0);
+        const current = best.get(address);
+        if (!current || liquidityUsd > current.liquidityUsd) {
+          best.set(address, { priceUsd: pair.priceUsd ? Number(pair.priceUsd) : null, liquidityUsd });
+        }
+      }
+      for (const holding of unknown) {
+        const match = best.get(holding.address.toLowerCase());
+        if (!match) continue;
+        holding.priceUsd = match.priceUsd;
+        holding.liquidityUsd = match.liquidityUsd;
+        holding.valueUsd = match.priceUsd ? holding.amount * match.priceUsd : null;
+      }
+    } catch (error) {
+      // A pricing outage must not turn someone's holdings into spam.
+      this.logger.warn?.(`Could not price unlisted holdings: ${error.message}`);
+    }
+  }
+
   // Ranks same-ticker candidates by what the chain says rather than what the
   // explorer claims: quote a real buy, then quote selling it straight back.
   // A token with no pool, or one rigged to swallow buys, scores nothing.
@@ -602,6 +637,11 @@ export class OnchainBroker {
         };
       });
 
+    // The explorer prices almost nothing outside its own listings, so judging
+    // spam on "has no price" hid tokens people had just bought through us.
+    // Anything with real pair liquidity is a real holding, whatever the
+    // explorer knows about it.
+    await this.priceUnknownHoldings(all);
     const real = all.filter((holding) => !isSpamToken(holding));
     // Two tokens claiming one ticker: the issuer-verified or priced one is the
     // real holding, the other is an impersonation.
@@ -636,10 +676,10 @@ const SPAM_TEXT = /(https?:|www\.|\.com|\.net|\.xyz|\.io\b|\.org|claim|airdrop|r
 function isSpamToken(holding) {
   if (holding.official) return false;
   if (SPAM_TEXT.test(`${holding.name} ${holding.symbol}`)) return true;
-  // Never priced by the explorer and never given an icon: nobody trades it,
-  // and it arrived unrequested.
-  if (!holding.priceUsd && !holding.icon) return true;
-  return false;
+  // A token with a live market is a holding, full stop. Only things nobody
+  // prices anywhere and nobody trades are treated as unsolicited junk.
+  if (holding.priceUsd || holding.liquidityUsd > 0) return false;
+  return !holding.icon;
 }
 
 function usdToWei(amountUsd, ethUsd) {

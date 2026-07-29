@@ -90,6 +90,7 @@ export default function PortfolioPage({ params }) {
         the bot on X. Not investment advice. Robinhood
         Stock Tokens are not offered to U.S., Canadian, UK, or Swiss persons.
       </p>
+      <p className="fineprint"><a href="/docs">How to talk to the bot</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a></p>
     </main>
   );
 }

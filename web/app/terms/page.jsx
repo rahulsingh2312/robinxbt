@@ -95,7 +95,7 @@ export default function Terms() {
       </div>
 
       <div className="divider" aria-hidden="true"><span>· · ·</span></div>
-      <p className="fineprint"><a href="/">Home</a> · <a href="/privacy">Privacy Policy</a></p>
+      <p className="fineprint"><a href="/">Home</a> · <a href="/docs">How to talk to the bot</a> · <a href="/privacy">Privacy Policy</a></p>
     </main>
   );
 }

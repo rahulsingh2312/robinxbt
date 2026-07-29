@@ -73,7 +73,7 @@ export default function Privacy() {
       </div>
 
       <div className="divider" aria-hidden="true"><span>· · ·</span></div>
-      <p className="fineprint"><a href="/">Home</a> · <a href="/terms">Terms of Service</a></p>
+      <p className="fineprint"><a href="/">Home</a> · <a href="/docs">How to talk to the bot</a> · <a href="/terms">Terms of Service</a></p>
     </main>
   );
 }

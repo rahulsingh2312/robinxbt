@@ -345,15 +345,16 @@ a.btn-glass .short { display: none; }
   background: transparent;
 }
 .deposit-actions .link-action:hover { color: var(--ink); border-color: var(--edge); background: var(--surface-2); }
+/* A caption, not a control: the two buttons carry the surface, this reads as
+   the note it is. */
 .deposit-actions .warn-text {
   flex: 1 1 auto;
   min-width: 0;
   justify-content: center;
-  padding: 11px 13px;
+  padding: 11px 2px;
   font-size: 0.72rem;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  background: var(--surface-2);
+  border: 0;
+  background: none;
 }
 
 /* Overlapping chain-asset chips on the deposit card. */
@@ -419,12 +420,48 @@ a.btn-glass .short { display: none; }
 .error-text { color: var(--danger); font-size: 0.9rem; }
 .fineprint { color: var(--muted); font-size: 0.75rem; line-height: 1.75; text-align: center; }
 
+/* Docs: each rule shown as the message that triggers it, with a colour-coded
+   rail so the three groups are distinguishable at a glance. */
+.phrases { display: flex; flex-direction: column; gap: 12px; max-width: 62ch; }
+.phrase {
+  border-left: 2px solid var(--line);
+  padding: 2px 0 2px 16px;
+}
+.phrase.yes { border-left-color: var(--ink); }
+.phrase.ask { border-left-color: var(--muted); }
+.phrase.no { border-left-color: var(--danger); }
+.phrase .said {
+  margin: 0;
+  font-family: var(--font-m);
+  font-size: 0.88rem;
+  word-break: break-word;
+}
+.phrase .means { margin: 4px 0 0; color: var(--muted); font-size: 0.86rem; }
+
 .skeleton {
   height: 14px; border-radius: 6px; background: var(--surface-2);
   animation: pulse 1.2s ease-in-out infinite;
 }
 @keyframes pulse { 50% { opacity: 0.45; } }
-@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+@media (prefers-reduced-motion: reduce) { /* Docs: each rule shown as the message that triggers it, with a colour-coded
+   rail so the three groups are distinguishable at a glance. */
+.phrases { display: flex; flex-direction: column; gap: 12px; max-width: 62ch; }
+.phrase {
+  border-left: 2px solid var(--line);
+  padding: 2px 0 2px 16px;
+}
+.phrase.yes { border-left-color: var(--ink); }
+.phrase.ask { border-left-color: var(--muted); }
+.phrase.no { border-left-color: var(--danger); }
+.phrase .said {
+  margin: 0;
+  font-family: var(--font-m);
+  font-size: 0.88rem;
+  word-break: break-word;
+}
+.phrase .means { margin: 4px 0 0; color: var(--muted); font-size: 0.86rem; }
+
+.skeleton { animation: none; } }
 
 /* ---------- mobile ----------
    Same philosophy, phone-tuned: tighter vertical rhythm, everything on the

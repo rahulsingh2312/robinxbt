@@ -24,6 +24,7 @@ import { WalletVault } from "./wallet-vault.js";
 import { ChainClient } from "./chain.js";
 import { Dex } from "./dex.js";
 import { DexV2 } from "./dex-v2.js";
+import { DexV3 } from "./dex-v3.js";
 import { DexRouter } from "./dex-router.js";
 import { AssetResolver } from "./asset-resolver.js";
 import { OnchainBroker } from "./onchain-broker.js";
@@ -100,7 +101,8 @@ if (config.onchain.enabled) {
   // quote asks both and the better fill wins.
   const dex = new DexRouter({
     v4: new Dex({ provider: chain.provider, slippageBps: config.onchain.slippageBps }),
-    v2: new DexV2({ provider: chain.provider, slippageBps: config.onchain.maxSlippageBps })
+    v3: new DexV3({ provider: chain.provider, slippageBps: config.onchain.slippageBps }),
+    v2: new DexV2({ provider: chain.provider, slippageBps: config.onchain.slippageBps })
   });
   const resolver = new AssetResolver({ baseUrl: config.onchain.blockscoutBaseUrl });
   onchain = new OnchainBroker({

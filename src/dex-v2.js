@@ -98,26 +98,57 @@ export class DexV2 {
 
   // The fee-on-transfer variants are used throughout: plenty of memecoins tax
   // transfers, and the plain functions revert on them rather than filling.
-  async swap(signer, tokenIn, tokenOut, amountIn, { route = null, slippageBps = null } = {}) {
+  //
+  // getAmountsOut cannot know about a transfer tax, so its quote is optimistic
+  // for exactly the tokens people ask for. Rather than guess a slippage number
+  // that covers every token, the swap is simulated against the live chain and
+  // the bound is widened until it actually passes. An eth_call costs nothing;
+  // a reverted transaction costs gas and looks like a broken bot.
+  async swap(signer, tokenIn, tokenOut, amountIn, { route = null, slippageBps = null, maxSlippageBps = 5000 } = {}) {
     const chosen = route ?? await this.findBestRoute(tokenIn, tokenOut, amountIn);
     if (!chosen) throw new Error("no v2 route found for this pair");
-    const minAmountOut = this.minOut(chosen.amountOut, slippageBps);
-    const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
     const to = await signer.getAddress();
-    const router = this.router.connect(signer);
+    const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
+    if (tokenIn !== ZeroAddress) await this.ensureAllowance(signer, tokenIn, amountIn);
 
-    let tx;
-    if (tokenIn === ZeroAddress) {
-      tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(minAmountOut, chosen.path, to, deadline, { value: amountIn });
-    } else {
-      await this.ensureAllowance(signer, tokenIn, amountIn);
-      tx = tokenOut === ZeroAddress
-        ? await router.swapExactTokensForETHSupportingFeeOnTransferTokens(amountIn, minAmountOut, chosen.path, to, deadline)
-        : await router.swapExactTokensForTokensSupportingFeeOnTransferTokens(amountIn, minAmountOut, chosen.path, to, deadline);
-    }
-    const receipt = await tx.wait();
+    const call = (contract, minAmountOut, overrides = {}) => {
+      if (tokenIn === ZeroAddress) {
+        return [contract.swapExactETHForTokensSupportingFeeOnTransferTokens, [minAmountOut, chosen.path, to, deadline, { value: amountIn, ...overrides }]];
+      }
+      if (tokenOut === ZeroAddress) {
+        return [contract.swapExactTokensForETHSupportingFeeOnTransferTokens, [amountIn, minAmountOut, chosen.path, to, deadline, overrides]];
+      }
+      return [contract.swapExactTokensForTokensSupportingFeeOnTransferTokens, [amountIn, minAmountOut, chosen.path, to, deadline, overrides]];
+    };
+
+    const minAmountOut = await this.findWorkableMinOut(chosen, slippageBps, maxSlippageBps, to, call);
+    const [method, args] = call(this.router.connect(signer), minAmountOut);
+    const receipt = await (await method(...args)).wait();
     if (receipt.status !== 1) throw new Error(`v2 swap reverted in tx ${receipt.hash}`);
     return { hash: receipt.hash, quotedOut: chosen.amountOut, minAmountOut, route: "v2" };
+  }
+
+  // Widens the output bound step by step until the chain accepts the trade,
+  // never past the ceiling the caller allows.
+  async findWorkableMinOut(route, slippageBps, maxSlippageBps, from, call) {
+    const start = slippageBps ?? this.slippageBps;
+    const ladder = [...new Set([start, 300, 600, 1200, 2500, maxSlippageBps])]
+      .filter((bps) => bps >= start && bps <= maxSlippageBps)
+      .sort((a, b) => a - b);
+    let lastError;
+    for (const bps of ladder) {
+      const minAmountOut = this.minOut(route.amountOut, bps);
+      const [method, args] = call(this.router, minAmountOut, { from });
+      try {
+        await method.staticCall(...args);
+        return minAmountOut;
+      } catch (error) {
+        lastError = error;
+        // Anything other than the price bound will not be fixed by widening it.
+        if (!/INSUFFICIENT_OUTPUT_AMOUNT|INSUFFICIENT_AMOUNT|K\b/i.test(String(error.shortMessage ?? error.message))) break;
+      }
+    }
+    throw lastError ?? new Error("v2 swap could not be priced within the allowed slippage");
   }
 
   async ensureAllowance(signer, token, amountIn) {

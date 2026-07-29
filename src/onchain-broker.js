@@ -385,7 +385,8 @@ export class OnchainBroker {
         : (await this.chain.getTokenBalance(spend.convertTo, wallet.address)).raw;
 
       const converted = await this.dex.swap(signer, spend.tokenIn, spend.convertTo, spend.amountIn, {
-        slippageBps: this.config.maxSlippageBps
+        slippageBps: this.config.maxSlippageBps,
+        maxSlippageBps: this.config.maxSlippageBps
       });
 
       const balanceAfter = spend.convertTo === NATIVE
@@ -406,9 +407,9 @@ export class OnchainBroker {
           txHash: converted.hash
         };
       }
-      result = await this.dex.swap(signer, spend.convertTo, asset.address, buyAmountIn, { slippageBps });
+      result = await this.dex.swap(signer, spend.convertTo, asset.address, buyAmountIn, { slippageBps, maxSlippageBps: this.config.maxSlippageBps });
     } else {
-      result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn, { route, slippageBps });
+      result = await this.dex.swap(signer, spend.tokenIn, asset.address, spend.amountIn, { route, slippageBps, maxSlippageBps: this.config.maxSlippageBps });
     }
     const filled = Number(result.quotedOut) / 10 ** meta.decimals;
     this.logger.info(`Onchain buy: $${amountUsd} of ${asset.symbol} for author ${authorId}, tx ${result.hash}`);
@@ -531,7 +532,8 @@ export class OnchainBroker {
     const signer = this.vault.signerFor(wallet, this.chain.provider);
     const result = await this.dex.swap(signer, holding.address, proceedsIn, amountIn, {
       route,
-      slippageBps: this.config.maxSlippageBps
+      slippageBps: this.config.maxSlippageBps,
+      maxSlippageBps: this.config.maxSlippageBps
     });
     const proceeds = proceedsIn === NATIVE
       ? `${formatEthAmount(Number(formatEther(result.quotedOut)))} ETH`

@@ -141,6 +141,17 @@ export class Store {
     return this.data.wallets?.[this.userKey(botUsername, authorId)] ?? null;
   }
 
+  // Single-process fallback: the check and the write happen without an await
+  // between them, so concurrent callers cannot both see "absent".
+  async createWalletIfAbsent(botUsername, authorId, record) {
+    this.data.wallets ??= {};
+    const key = this.userKey(botUsername, authorId);
+    const existing = this.data.wallets[key];
+    if (existing) return { record: existing, created: false };
+    await this.setWallet(botUsername, authorId, record);
+    return { record, created: true };
+  }
+
   async setWallet(botUsername, authorId, record) {
     this.data.wallets ??= {};
     this.data.walletIndex ??= {};

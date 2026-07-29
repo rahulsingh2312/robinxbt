@@ -3,6 +3,10 @@
 import { use, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
+// Opens X with the mention prefilled: the whole product starts with a tweet.
+const INTENT_START = "https://x.com/intent/post?text=" +
+  encodeURIComponent("@TryPeterpan what's worth buying on Robinhood Chain right now?");
+
 // A statement, not a dashboard: total first, deposit next (the loop people
 // arrive here to close), holdings, then manage. Manage only renders for the
 // signed-in owner; viewing is public because the chain already is.
@@ -51,11 +55,18 @@ export default function PortfolioPage({ params }) {
       </nav>
 
       {error ? (
-        <section className="hero" style={{ gap: 12 }}>
+        <section className="hero" style={{ gap: 14 }}>
           <Avatar handle={handle} />
           <h1 style={{ fontSize: "1.8rem" }}>@{handle}</h1>
-          <p className="muted" style={{ margin: 0 }}>{error}</p>
-          <p style={{ margin: 0 }}>Mention @TryPeterpan on X and a wallet appears here on its own.</p>
+          <p className="muted" style={{ margin: 0, maxWidth: "44ch" }}>{error}</p>
+          {/* The page is a dead end without this: the only way to open a
+              wallet is to talk to the bot, so hand them the tweet. */}
+          <a className="btn" href={INTENT_START} target="_blank" rel="noreferrer">
+            Talk to Peterpan on 𝕏 ↗
+          </a>
+          <p className="fineprint" style={{ margin: 0 }}>
+            Your wallet appears here the moment the bot replies.
+          </p>
         </section>
       ) : !portfolio ? (
         <LoadingStatement handle={handle} />

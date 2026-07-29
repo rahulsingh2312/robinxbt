@@ -47,8 +47,18 @@ export class MentionWorker {
   }
 
   // Returns the reason a reply is refused, or null when it is allowed.
-  cappedReason(authorId) {
+  // Backed by the database when one is configured, so the budget survives
+  // restarts and is shared across instances rather than resetting per process.
+  async cappedReason(authorId) {
     if (!this.replyCaps) return null;
+    if (this.store.countReplies) {
+      const counts = await this.store.countReplies(this.bot.botUsername, authorId);
+      if (counts.day >= this.replyCaps.perDay) return `daily cap of ${this.replyCaps.perDay} replies`;
+      if (counts.authorHour >= this.replyCaps.perAuthorPerHour) {
+        return `cap of ${this.replyCaps.perAuthorPerHour} replies/hour to @${authorId}`;
+      }
+      return null;
+    }
     const now = Date.now();
     this.replyTimes = this.replyTimes.filter((entry) => now - entry.at < 86_400_000);
     if (this.replyTimes.length >= this.replyCaps.perDay) return `daily cap of ${this.replyCaps.perDay} replies`;
@@ -60,8 +70,10 @@ export class MentionWorker {
     return null;
   }
 
-  recordReply(authorId) {
+  async recordReply(authorId) {
     this.replyTimes.push({ authorId: String(authorId ?? ""), at: Date.now() });
+    await this.store.recordReplyAt?.(this.bot.botUsername, authorId).catch((error) =>
+      this.logger.warn("Could not record reply for capping", error.message));
   }
 
   // Own LLM first: it answers from live Robinhood data and costs DeepSeek
@@ -126,7 +138,7 @@ export class MentionWorker {
     // whichever arrives first wins and the rest are dropped here.
     if (post.id && !(await this.store.claimMention(this.bot.botUsername, post.id))) return;
     // Checked before the model runs, so a capped mention costs nothing.
-    const capped = this.cappedReason(post.author_id);
+    const capped = await this.cappedReason(post.author_id);
     if (capped) {
       this.logger.warn(`Skipping mention ${post.id}: ${capped}`);
       return;
@@ -144,7 +156,7 @@ export class MentionWorker {
     const reply = await this.commandReply(post.text, username, post);
     if (reply === null) return;
     if (this.bot.dryRun) {
-      this.recordReply(post.author_id);
+      await this.recordReply(post.author_id);
       this.logger.info(`[dry run] reply to ${post.id}: ${reply}`);
       return;
     }
@@ -159,7 +171,7 @@ export class MentionWorker {
       await this.store.releaseMention?.(this.bot.botUsername, post.id);
       throw error;
     }
-    this.recordReply(post.author_id);
+    await this.recordReply(post.author_id);
     const sentId = sent?.data?.id;
     // The basket is keyed by the bot's own reply, so only a reply to THAT post
     // can confirm it. Saved after sending because the ID does not exist before.

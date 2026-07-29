@@ -9,7 +9,8 @@
     "robinhood:login": "node --env-file-if-exists=.env src/robinhood-login.js",
     "test": "node --test",
     "wallets:rewrap": "node --env-file-if-exists=.env src/rewrap-wallets.js",
-    "db:migrate": "node --env-file-if-exists=.env src/migrate-to-postgres.js"
+    "db:migrate": "node --env-file-if-exists=.env src/migrate-to-postgres.js",
+    "db:backup": "node --env-file-if-exists=.env src/backup-db.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

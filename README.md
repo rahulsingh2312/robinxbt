@@ -65,6 +65,29 @@ holdings; **Sign in with X** (set `X_CLIENT_ID`, register the redirect URI
 `{SITE_BASE_URL}/auth/x/callback`) unlocks withdrawing to any address and
 exporting the private key, so users can always exit your custody.
 
+### Running in production
+
+- **PostgreSQL is required.** The JSON store is a development fallback: one
+  unsynced file, no backups, and no safety across processes. Set
+  `DATABASE_URL`, then `npm run db:migrate` to copy an existing JSON store in
+  (idempotent, so a re-run after a partial failure is fine).
+- **Back the database up off-host.** `npm run db:backup` writes a `pg_dump`
+  to `./backups`. The encrypted wallet keys live only there;
+  `WALLET_ENC_KEY` lives only in the environment. Losing either loses the
+  wallets, and a backup that never leaves the box is not a backup.
+- **Set `PROXY_SHARED_SECRET`** to the same value here and in the site's
+  environment. Without it the API answers anyone who finds the port, and
+  every visitor shares the proxy's IP in a single rate-limit bucket.
+- **Use a dedicated RPC provider.** The public Robinhood Chain endpoint is
+  rate limited; reads are batched, retried, and cached for a few seconds, but
+  a real user base needs a paid endpoint in `ROBINHOOD_CHAIN_RPC_URL`.
+- **Run one bot process.** Wallet signing is serialized per wallet with a
+  Postgres advisory lock, so a second instance is safe, but each one polls X
+  independently and every poll is billed.
+- **Rotate the wallet key without downtime**: set `WALLET_ENC_KEY_PREVIOUS`
+  to the old key, put the new one in `WALLET_ENC_KEY`, restart, run
+  `npm run wallets:rewrap`, then drop the previous key.
+
 ### Read this before enabling
 
 - **You are a custodian.** The store (JSON file or Postgres) plus

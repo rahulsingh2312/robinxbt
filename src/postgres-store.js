@@ -75,6 +75,19 @@ export class PostgresStore {
       )
     `);
     await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS xbot_replies (
+        bot_username TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        replied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS xbot_replies_recent ON xbot_replies (bot_username, replied_at DESC)
+    `);
+    await this.pool.query(`
+      CREATE INDEX IF NOT EXISTS xbot_replies_author ON xbot_replies (bot_username, author_id, replied_at DESC)
+    `);
+    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS xbot_spend (
         bot_username TEXT NOT NULL,
         day DATE NOT NULL,
@@ -171,6 +184,34 @@ export class PostgresStore {
     return result.rows[0]?.data ?? null;
   }
 
+  // Returns the stored record, inserting only if this author has none. The
+  // insert is atomic, so concurrent mentions from a brand-new user converge on
+  // one wallet instead of overwriting each other's keys.
+  async createWalletIfAbsent(botUsername, authorId, record) {
+    const inserted = await this.pool.query(
+      `INSERT INTO xbot_wallets (bot_username, author_id, x_username, data)
+       VALUES ($1, $2, $3, $4::jsonb)
+       ON CONFLICT (bot_username, author_id) DO NOTHING
+       RETURNING data`,
+      [botUsername.toLowerCase(), String(authorId), record.xUsername ?? null, JSON.stringify(record)]
+    );
+    if (inserted.rowCount > 0) return { record: inserted.rows[0].data, created: true };
+    return { record: await this.getWalletByAuthor(botUsername, authorId), created: false };
+  }
+
+  // Serializes work across every process talking to this database, so a
+  // second instance cannot sign a transaction with the same nonce.
+  async withAdvisoryLock(key, work) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("SELECT pg_advisory_lock(hashtext($1))", [String(key)]);
+      return await work();
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(hashtext($1))", [String(key)]).catch(() => {});
+      client.release();
+    }
+  }
+
   async setWallet(botUsername, authorId, record) {
     await this.pool.query(
       `INSERT INTO xbot_wallets (bot_username, author_id, x_username, data)
@@ -224,6 +265,28 @@ export class PostgresStore {
       "DELETE FROM xbot_pending_buys WHERE bot_username = $1 AND post_id = $2",
       [botUsername.toLowerCase(), String(postId)]
     );
+  }
+
+  async recordReplyAt(botUsername, authorId) {
+    await this.pool.query(
+      "INSERT INTO xbot_replies (bot_username, author_id) VALUES ($1, $2)",
+      [botUsername.toLowerCase(), String(authorId ?? "")]
+    );
+    // Cheap opportunistic prune; the counters only ever look back a day.
+    if (Math.floor(Date.now() / 1000) % 50 === 0) {
+      await this.pool.query("DELETE FROM xbot_replies WHERE replied_at < now() - interval '2 days'");
+    }
+  }
+
+  async countReplies(botUsername, authorId) {
+    const result = await this.pool.query(
+      `SELECT
+         count(*) FILTER (WHERE replied_at > now() - interval '1 day')::int AS day,
+         count(*) FILTER (WHERE author_id = $2 AND replied_at > now() - interval '1 hour')::int AS author_hour
+       FROM xbot_replies WHERE bot_username = $1`,
+      [botUsername.toLowerCase(), String(authorId ?? "")]
+    );
+    return { day: result.rows[0].day, authorHour: result.rows[0].author_hour };
   }
 
   async getLastMentionId(botUsername) {

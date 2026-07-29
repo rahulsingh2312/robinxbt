@@ -45,9 +45,13 @@ export class OnchainApi {
     // site is on https, so it is only allowed alongside an http site URL.
     this.allowedOrigins = [config.onchain.siteBaseUrl, this.secureCookies ? null : config.publicBaseUrl].filter(Boolean);
     this.proxySecret = config.onchain.proxySecret;
+    // Reads are cached and cheap, and without a proxy secret every visitor
+    // shares the proxy's IP in one bucket, so the read budget has to be big
+    // enough for a crowd. The money paths stay tight because they are keyed
+    // per account, not per address.
     this.limits = {
-      login: new RateLimiter({ windowMs: 10 * 60_000, max: 20 }),
-      portfolio: new RateLimiter({ windowMs: 60_000, max: 60 }),
+      login: new RateLimiter({ windowMs: 10 * 60_000, max: 60 }),
+      portfolio: new RateLimiter({ windowMs: 60_000, max: 600 }),
       move: new RateLimiter({ windowMs: 10 * 60_000, max: 10 }),
       export: new RateLimiter({ windowMs: 60 * 60_000, max: 3 })
     };

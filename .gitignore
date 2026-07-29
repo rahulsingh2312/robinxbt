@@ -10,3 +10,4 @@ web/.next/
 *.bak-*
 .env.*
 !.env.example
+backups/

@@ -65,9 +65,20 @@ export class OnchainBroker {
     // One buy at a time per wallet: two mentions racing through the same
     // signer would collide on the account nonce and double-count balances.
     this.walletLocks = new Map();
+    // Many viewers of one portfolio should be one explorer call, not many.
+    this.holdingsCache = new Map();
   }
 
   async withWalletLock(authorId, work) {
+    // In-process queue first (cheap), then a database advisory lock so a
+    // second app instance cannot sign concurrently for the same wallet.
+    if (this.store.withAdvisoryLock) {
+      return this.queueLocally(authorId, () => this.store.withAdvisoryLock(`wallet:${authorId}`, work));
+    }
+    return this.queueLocally(authorId, work);
+  }
+
+  queueLocally(authorId, work) {
     const key = String(authorId);
     const previous = this.walletLocks.get(key) ?? Promise.resolve();
     const current = previous.then(work, work);
@@ -262,9 +273,14 @@ export class OnchainBroker {
   // the real one. Holdings show what the wallet actually owns; the junk is
   // counted and dropped.
   async fetchHoldings(address) {
+    const cacheKey = address.toLowerCase();
+    const hit = this.holdingsCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < 5_000) return hit.value;
     const base = this.config.blockscoutBaseUrl.replace(/\/$/, "");
-    const response = await fetch(`${base}/api/v2/addresses/${address}/token-balances`);
-    if (!response.ok) return [];
+    const response = await fetch(`${base}/api/v2/addresses/${address}/token-balances`, {
+      signal: AbortSignal.timeout(8_000)
+    }).catch(() => null);
+    if (!response?.ok) return hit?.value ?? [];
     const items = await response.json();
     const all = items
       .filter((item) => item.token?.type === "ERC-20" && item.value !== "0")
@@ -297,6 +313,8 @@ export class OnchainBroker {
     }
     const holdings = [...bySymbol.values()].sort((a, b) => (b.valueUsd ?? 0) - (a.valueUsd ?? 0));
     holdings.hiddenCount = all.length - holdings.length;
+    this.holdingsCache.set(cacheKey, { value: holdings, at: Date.now() });
+    if (this.holdingsCache.size > 5_000) this.holdingsCache.clear();
     return holdings;
   }
 }

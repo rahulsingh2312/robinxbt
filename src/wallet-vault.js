@@ -99,8 +99,13 @@ export class WalletVault {
       key: this.encrypt(wallet.privateKey),
       createdAt: new Date().toISOString()
     };
-    await store.setWallet(botUsername, String(authorId), record);
-    return { ...record, created: true };
+    // Racing mentions from one new user must converge on a single wallet: the
+    // loser of the insert adopts the winner's record rather than replacing it,
+    // which would strand anything already deposited.
+    const result = store.createWalletIfAbsent
+      ? await store.createWalletIfAbsent(botUsername, String(authorId), record)
+      : (await store.setWallet(botUsername, String(authorId), record), { record, created: true });
+    return { ...result.record, created: result.created };
   }
 
   // Re-encrypts every stored wallet under the current key. Run once after

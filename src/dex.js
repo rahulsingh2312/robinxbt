@@ -99,7 +99,8 @@ export class Dex {
     );
     const routes = (await Promise.all(attempts)).filter(Boolean).filter((route) => route.amountOut > 0n);
     if (routes.length === 0) return null;
-    return routes.reduce((best, route) => (route.amountOut > best.amountOut ? route : best));
+    const best = routes.reduce((a, b) => (b.amountOut > a.amountOut ? b : a));
+    return { ...best, venue: "v4" };
   }
 
   // USD sizing runs through the ETH/USDG pool: how many dollars one ETH buys

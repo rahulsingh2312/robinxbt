@@ -23,6 +23,8 @@ import { redactingLogger, securityHeaders } from "./http-guard.js";
 import { WalletVault } from "./wallet-vault.js";
 import { ChainClient } from "./chain.js";
 import { Dex } from "./dex.js";
+import { DexV2 } from "./dex-v2.js";
+import { DexRouter } from "./dex-router.js";
 import { AssetResolver } from "./asset-resolver.js";
 import { OnchainBroker } from "./onchain-broker.js";
 import { OnchainApi } from "./onchain-api.js";
@@ -94,7 +96,12 @@ let onchainApi = null;
 if (config.onchain.enabled) {
   const vault = new WalletVault(config.onchain.walletEncKey, config.onchain.previousWalletEncKey);
   const chain = new ChainClient({ rpcUrl: config.onchain.rpcUrl });
-  const dex = new Dex({ provider: chain.provider, slippageBps: config.onchain.slippageBps });
+  // Liquidity is split across both Uniswap versions on this chain, so every
+  // quote asks both and the better fill wins.
+  const dex = new DexRouter({
+    v4: new Dex({ provider: chain.provider, slippageBps: config.onchain.slippageBps }),
+    v2: new DexV2({ provider: chain.provider, slippageBps: config.onchain.maxSlippageBps })
+  });
   const resolver = new AssetResolver({ baseUrl: config.onchain.blockscoutBaseUrl });
   onchain = new OnchainBroker({
     store, vault, chain, dex, resolver,

@@ -7,6 +7,7 @@ import { parseBuyIntent } from "./onchain-broker.js";
 import { IntentReader } from "./intent-reader.js";
 import { redact } from "./http-guard.js";
 import { looksLikeToolMarkup } from "./llm.js";
+import { TradeVoice } from "./trade-voice.js";
 
 // Deliberately broad: every phrasing of "what is your contract address" has to
 // hit the deterministic answer rather than reach the model.
@@ -27,7 +28,7 @@ function extractSymbols(text, limit = 4) {
 export class MentionWorker {
   // No reply may contain a URL. X charges $0.20 for a post with a link versus
   // $0.015 without, so the public base URL is deliberately not available here.
-  constructor({ store, client, bot, logger = console, broker = null, limits = null, insiders = null, llm = null, replyCaps = null, onchain = null, contextDepth = 3, onFill = null, token = null }) {
+  constructor({ store, client, bot, logger = console, broker = null, limits = null, insiders = null, llm = null, replyCaps = null, onchain = null, contextDepth = 3, onFill = null, token = null, persona = "default" }) {
     this.store = store;
     this.client = client;
     this.bot = bot;
@@ -60,6 +61,7 @@ export class MentionWorker {
     // through the model, because a model will eventually mistype one hex
     // character and send somebody to a different contract.
     this.token = token;
+    this.voice = new TradeVoice(persona);
   }
 
   // Returns the reason a reply is refused, or null when it is allowed.
@@ -243,10 +245,10 @@ export class MentionWorker {
   // assembled here from configuration so the exact string is guaranteed.
   contractReply(text) {
     if (!ASKS_FOR_CONTRACT.test(text)) return null;
-    if (!this.token?.launched) {
-      return `No token yet. When there is one I'll post the contract address myself, and it'll be pinned. Anything you see before that is someone lying to you.`;
-    }
-    return `$${this.token.ticker} · ${this.token.address} — that exact string, nothing else. Reply "buy $20 of ${this.token.address}" and I'll fill it from your wallet.`;
+    // The wording varies; the address does not. It is interpolated from
+    // configuration by the same code every time.
+    if (!this.token?.launched) return this.voice.say("contractSoon");
+    return this.voice.say("contract", { ticker: this.token.ticker, address: this.token.address });
   }
 
   async commandReply(text, username, post = {}) {

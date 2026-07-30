@@ -142,7 +142,8 @@ const workers = config.bots.map((bot) => new MentionWorker({
   contextDepth: config.contextDepth,
   onchain,
   onFill: (fill) => shitposter?.recordFill(fill),
-  token: config.token
+  token: config.token,
+  persona: config.persona.name
 }));
 
 const RESPONSE_HEADERS = securityHeaders({ https: config.publicBaseUrl.startsWith("https:") || config.onchain.siteBaseUrl.startsWith("https:") });

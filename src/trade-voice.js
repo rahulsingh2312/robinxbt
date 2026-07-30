@@ -32,7 +32,11 @@ const PLAIN = {
   nothingToSell: ({ symbol, held }) =>
     `You're not holding any ${symbol}. You have ${held}.`,
   sellNoGas: () =>
-    `Selling costs gas and your wallet has none. Send a little ETH on Robinhood Chain, then ask again.`
+    `Selling costs gas and your wallet has none. Send a little ETH on Robinhood Chain, then ask again.`,
+  contract: ({ ticker, address }) =>
+    `$${ticker} · ${address} — that exact string, nothing else. Reply "buy $20 of $${ticker}" and I'll fill it from your wallet.`,
+  contractSoon: () =>
+    `No token yet. When there is one I'll post the contract address myself and pin it. Anything you see before that is someone lying to you.`
 };
 
 // Same facts, in character. Kept to two or three options each: enough that the
@@ -87,6 +91,19 @@ const GORK = {
   ],
   sellNoGas: [
     () => `selling costs gas and you have none. send a bit of ETH on robinhood chain and ask again.`
+  ],
+  // The address itself is never written by a model — these only wrap it.
+  contract: [
+    ({ ticker, address }) => `${address}. that's the whole thing, don't let anyone hand you a different one. reply "buy $20 of $${ticker}" and it's in your wallet before you finish doubting it.`,
+    ({ ticker, address }) => `$${ticker} · ${address}. i deployed it, i'm not selling it, and i'll buy it for you if you ask nicely: reply "buy $20 of $${ticker}".`,
+    ({ ticker, address }) => `it's ${address}. funny part is you don't even need it — reply "buy $10 of $${ticker}" and i'll do the whole thing for you.`,
+    ({ ticker, address }) => `$${ticker} · ${address}. copy it from me or from the pinned post and nowhere else. or skip the paranoia entirely: reply "buy $20 of $${ticker}".`,
+    ({ ticker, address }) => `${address}. one address, no presale, no dms, no allocation for your "community". reply "buy $20 of $${ticker}" if you want in.`
+  ],
+  contractSoon: [
+    () => `haven't launched anything yet. when i do i'll post it myself and pin it. anyone showing you a contract address with my name on it right now is fishing, and you're the fish.`,
+    () => `no token. if someone dm'd you a ca claiming it's mine, congratulations, you've met your first scammer of the day.`,
+    () => `nothing to buy yet. i'll announce it, i'll pin it, and it'll come from this account. everything else is a screenshot and a prayer.`
   ]
 };
 

@@ -579,11 +579,13 @@ function isAddressRejection(error) {
 // Swaps an address out for somewhere it can always be read instead. Our own
 // token points at the launch post; a deposit address points at the portfolio.
 function withoutWalletAddress(text, token = null) {
+  // No meta-commentary about the platform: the answer just points somewhere
+  // the address can be read, and reminds them they do not need it anyway.
   if (token?.launched && text.includes(token.address)) {
     const where = token.announcementUrl
       ? `it's in my launch post: ${token.announcementUrl}`
-      : `it's in my pinned post, and nowhere else`;
-    return `X won't let me put the address in a reply yet, so ${where}. Or skip it entirely: reply "buy $20 of $${token.ticker}" and I'll fill it from your wallet.`;
+      : `it's in my pinned post and nowhere else`;
+    return `$${token.ticker} — ${where}. or skip the copy-paste entirely: reply "buy $20 of $${token.ticker}" and I'll fill it from your wallet.`;
   }
   return text
     .replace(/\bSend at least ([\d.]+ ETH) to 0x[0-9a-fA-F]{40} on Robinhood Chain/i,

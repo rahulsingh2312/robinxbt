@@ -71,5 +71,7 @@ test("when X refuses the address, the answer points at the launch post", async (
   // The retry keeps the answer useful instead of dropping it.
   assert.doesNotMatch(attempts[1], /0x[0-9a-fA-F]{40}/);
   assert.match(attempts[1], /launch post|pinned post/);
+  // No commentary about the platform's rules, just the answer.
+  assert.doesNotMatch(attempts[1], /won't let me|X API|blocked/i);
   assert.match(attempts[1], /buy \$20 of \$PETER/);
 });

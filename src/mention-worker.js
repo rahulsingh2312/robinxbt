@@ -7,6 +7,10 @@ import { parseBuyIntent } from "./onchain-broker.js";
 import { IntentReader } from "./intent-reader.js";
 import { redact } from "./http-guard.js";
 
+// Deliberately broad: every phrasing of "what is your contract address" has to
+// hit the deterministic answer rather than reach the model.
+const ASKS_FOR_CONTRACT = /\b(ca|c\.a\.|contract|contract address|token address|your token|ur token|token ca|address of (?:your|ur) token|what.{0,12}(?:you|u|ur|your)\s+(?:token|coin|ca))\b/i;
+
 // Words that look like tickers but never are, so a basket is not built from
 // the agent's own prose.
 const NOT_TICKERS = new Set(["I", "A", "THE", "AND", "OR", "IF", "IT", "IS", "BUY", "SELL", "USD", "ETF", "CEO", "AI", "US", "Q1", "Q2", "Q3", "Q4", "YES", "NO", "PE", "EPS", "IPO"]);
@@ -22,7 +26,7 @@ function extractSymbols(text, limit = 4) {
 export class MentionWorker {
   // No reply may contain a URL. X charges $0.20 for a post with a link versus
   // $0.015 without, so the public base URL is deliberately not available here.
-  constructor({ store, client, bot, logger = console, broker = null, limits = null, insiders = null, llm = null, replyCaps = null, onchain = null, contextDepth = 3, onFill = null }) {
+  constructor({ store, client, bot, logger = console, broker = null, limits = null, insiders = null, llm = null, replyCaps = null, onchain = null, contextDepth = 3, onFill = null, token = null }) {
     this.store = store;
     this.client = client;
     this.bot = bot;
@@ -51,6 +55,10 @@ export class MentionWorker {
     // Notified after a real fill so the account can post about it. Trades
     // never wait on this.
     this.onFill = onFill;
+    // The account's own token, answered from configuration. Never routed
+    // through the model, because a model will eventually mistype one hex
+    // character and send somebody to a different contract.
+    this.token = token;
   }
 
   // Returns the reason a reply is refused, or null when it is allowed.
@@ -224,7 +232,20 @@ export class MentionWorker {
     this.logger.info(`Replied to ${post.id} (@${username}) as ${sentId ?? "unknown"}: ${reply}`);
   }
 
+  // "what's your ca", "drop the contract", "what's your token". The answer is
+  // assembled here from configuration so the exact string is guaranteed.
+  contractReply(text) {
+    if (!ASKS_FOR_CONTRACT.test(text)) return null;
+    if (!this.token?.launched) {
+      return `No token yet. When there is one I'll post the contract address myself, and it'll be pinned. Anything you see before that is someone lying to you.`;
+    }
+    return `$${this.token.ticker} · ${this.token.address} — that exact string, nothing else. Reply "buy $20 of ${this.token.address}" and I'll fill it from your wallet.`;
+  }
+
   async commandReply(text, username, post = {}) {
+    // Checked before anything else: a wrong answer here costs someone money.
+    const contract = this.contractReply(text);
+    if (contract) return contract;
     if (this.onchain) {
       const onchainReply = await this.onchainReply(text, username, post);
       if (onchainReply !== undefined) return onchainReply;

@@ -143,14 +143,18 @@ function loadReplyCaps() {
 function loadToken() {
   const address = (process.env.TOKEN_ADDRESS ?? "").trim();
   const ticker = (process.env.TOKEN_TICKER ?? "").trim().replace(/^\$/, "").toUpperCase();
-  if (!address) return { launched: false, ticker, address: "" };
+  if (!address) return { launched: false, ticker, address: "", announcementUrl: (process.env.TOKEN_ANNOUNCEMENT_URL ?? "").trim() };
   // Refused at startup rather than tweeted at strangers: a malformed address
   // here is worse than no address.
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
     throw new Error("TOKEN_ADDRESS must be a full 0x address (42 characters). Leave it blank until the token is launched.");
   }
   if (!ticker) throw new Error("TOKEN_TICKER must be set alongside TOKEN_ADDRESS");
-  return { launched: true, ticker, address };
+  // X refuses posts containing a crypto address for a week after an app
+  // authenticates. When that happens the bot points at the launch post
+  // instead of dropping the answer.
+  const announcementUrl = (process.env.TOKEN_ANNOUNCEMENT_URL ?? "").trim();
+  return { launched: true, ticker, address, announcementUrl };
 }
 
 function loadPersona() {

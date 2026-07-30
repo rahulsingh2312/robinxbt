@@ -55,3 +55,21 @@ test("a startup with a malformed address refuses to run", async () => {
   process.env.TOKEN_ADDRESS = previous.addr ?? "";
   process.env.TOKEN_TICKER = previous.ticker ?? "";
 });
+
+test("when X refuses the address, the answer points at the launch post", async () => {
+  const { instance } = worker({ ...LAUNCHED, announcementUrl: "https://x.com/TryPeterpan/status/123" });
+  const attempts = [];
+  instance.bot.dryRun = false;
+  instance.client.reply = async (postId, text) => {
+    attempts.push(text);
+    if (text.includes(ADDRESS)) throw new Error('X API 403: {"detail":"Crypto addresses are prohibited"}');
+    return { data: { id: "sent" } };
+  };
+  await instance.handleMention({ id: "70", author_id: "9", username: "alice", text: "@peterpan whats your ca" });
+  assert.equal(attempts.length, 2);
+  assert.ok(attempts[0].includes(ADDRESS));
+  // The retry keeps the answer useful instead of dropping it.
+  assert.doesNotMatch(attempts[1], /0x[0-9a-fA-F]{40}/);
+  assert.match(attempts[1], /launch post|pinned post/);
+  assert.match(attempts[1], /buy \$20 of \$PETER/);
+});

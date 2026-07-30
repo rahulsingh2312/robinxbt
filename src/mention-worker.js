@@ -208,7 +208,7 @@ export class MentionWorker {
       // an app authenticates, and filters them as spam afterwards. Losing the
       // whole reply over that is worse than losing the address, so the same
       // answer goes out pointing at the portfolio page instead.
-      const rewritten = withoutWalletAddress(text);
+      const rewritten = withoutWalletAddress(text, this.token);
       if (rewritten !== text && isAddressRejection(error)) {
         this.logger.warn(`X rejected the wallet address in reply to ${post.id}; sending without it`);
         try {
@@ -576,8 +576,15 @@ function isAddressRejection(error) {
   return /crypto address|not-authorized-for-resource|403/i.test(String(error?.message ?? ""));
 }
 
-// Swaps a wallet address out for the place it can always be read instead.
-function withoutWalletAddress(text) {
+// Swaps an address out for somewhere it can always be read instead. Our own
+// token points at the launch post; a deposit address points at the portfolio.
+function withoutWalletAddress(text, token = null) {
+  if (token?.launched && text.includes(token.address)) {
+    const where = token.announcementUrl
+      ? `it's in my launch post: ${token.announcementUrl}`
+      : `it's in my pinned post, and nowhere else`;
+    return `X won't let me put the address in a reply yet, so ${where}. Or skip it entirely: reply "buy $20 of $${token.ticker}" and I'll fill it from your wallet.`;
+  }
   return text
     .replace(/\bSend at least ([\d.]+ ETH) to 0x[0-9a-fA-F]{40} on Robinhood Chain/i,
       "Send at least $1 to the address on your portfolio page, link in bio")

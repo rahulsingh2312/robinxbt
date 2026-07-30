@@ -96,6 +96,17 @@ export class OnchainApi {
       return true;
     }
     if (request.method === "GET" && pathname === "/api/onchain/me") { await this.me(request, response); return true; }
+    // Public and unauthenticated: the site's header reads the token from here
+    // so the address has exactly one source of truth, the bot's own config.
+    if (request.method === "GET" && pathname === "/api/token") {
+      sendJson(response, 200, {
+        launched: Boolean(this.config.token?.launched),
+        ticker: this.config.token?.ticker ?? "",
+        address: this.config.token?.address ?? "",
+        chainId: 4663
+      });
+      return true;
+    }
     if (request.method === "GET" && pathname === "/auth/x/login") {
       if (this.limits.login.check(clientIp(request, { trustForwarded: request.proxyAuthenticated })) !== null) {
         return sendJson(response, 429, { error: "Too many sign-in attempts. Try again shortly." }), true;

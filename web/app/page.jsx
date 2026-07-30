@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import TokenPill from "./components/TokenPill";
 import { useState } from "react";
 
 // X's verified seal, drawn with the platform's own badge path so it reads as

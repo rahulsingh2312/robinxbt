@@ -6,6 +6,7 @@ import { describeBook } from "./paper-broker.js";
 import { parseBuyIntent } from "./onchain-broker.js";
 import { IntentReader } from "./intent-reader.js";
 import { redact } from "./http-guard.js";
+import { looksLikeToolMarkup } from "./llm.js";
 
 // Deliberately broad: every phrasing of "what is your contract address" has to
 // hit the deterministic answer rather than reach the model.
@@ -183,6 +184,12 @@ export class MentionWorker {
 
   // Posts a reply and records everything that depends on having sent it.
   async sendReply(post, reply, username) {
+    // A reply carrying model internals is worse than no reply: it is public,
+    // permanent, and makes the account look broken.
+    if (looksLikeToolMarkup(reply)) {
+      this.logger.error(`Refusing to post tool markup in reply to ${post.id}`);
+      return;
+    }
     if (this.bot.dryRun) {
       await this.recordReply(post.author_id);
       this.logger.info(`[dry run] reply to ${post.id}: ${reply}`);

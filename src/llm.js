@@ -28,6 +28,16 @@ You currently have NO live market data connection.
 // watchlists, search) is fair game for grounding a reply.
 const WRITE_TOOL = /order|buy|sell|trade|transfer|deposit|withdraw|cancel|replace|modify|update|delete|remove|add|create|set_/i;
 
+// Reasoning models sometimes emit a tool call as plain text instead of a
+// structured tool_calls field. That text is internal syntax, and one of those
+// went out as a public reply, so any content carrying it is treated as a
+// failed turn rather than an answer.
+const TOOL_MARKUP = /(?:｜|\|)\s*DSML|tool▁calls|<\s*\/?\s*(?:tool_calls?|invoke|function_calls?|antml)[\s:>]|<\uFF5C|"tool_calls"\s*:/i;
+
+export function looksLikeToolMarkup(text) {
+  return TOOL_MARKUP.test(String(text ?? ""));
+}
+
 // CJK, Hangul, Cyrillic, Arabic, Hebrew, Devanagari, Thai. Latin accents and
 // punctuation are fine — this is about a reply switching writing systems.
 const NON_LATIN = /[Ѐ-ӿ֐-׿؀-ۿऀ-ॿ฀-๿぀-ヿ㐀-䶿一-鿿가-힯]/;
@@ -114,6 +124,12 @@ export class LlmClient {
       const calls = message.tool_calls ?? [];
       if (calls.length === 0) {
         const text = (message.content ?? "").trim();
+        // Internal tool syntax in the content is not an answer, whatever it
+        // looks like. Ask again with no tools available.
+        if (text && looksLikeToolMarkup(text)) {
+          this.logger.warn("Model emitted tool markup as content; asking again without tools");
+          return { text: await this.finalAnswer(messages), rounds: round };
+        }
         if (text) return { text, rounds: round };
         // Content can come back empty when reasoning ate the budget. Silence
         // posts a canned fallback, so ask once more with nothing to think
@@ -139,7 +155,8 @@ export class LlmClient {
         [...messages, { role: "user", content: "Reply now, in your voice, using what you already have. Two sentences, plain text." }],
         []
       );
-      return (message.content ?? "").trim();
+      const text = (message.content ?? "").trim();
+      return looksLikeToolMarkup(text) ? "" : text;
     } catch (error) {
       this.logger.warn("Final answer attempt failed", error.message);
       return "";

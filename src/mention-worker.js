@@ -220,6 +220,14 @@ export class MentionWorker {
           await this.store.releaseMention?.(this.bot.botUsername, post.id);
           throw retryError;
         }
+      } else if (isUnrepliablePost(error)) {
+        // The claim stays held: a retry would fail identically, and any trade
+        // this mention caused has already settled on chain.
+        this.logger.warn(`X will not accept a reply to ${post.id} (author's reply settings); dropping it`);
+        await this.recordReply(post.author_id);
+        this.pendingBasket = null;
+        this.pendingOnchainBuy = null;
+        return;
       } else {
         // The claim is released so the poll fallback can retry. Orders are
         // guarded separately by claimOrder, so a retry cannot double-fill.
@@ -585,7 +593,18 @@ export class MentionWorker {
 }
 
 function isAddressRejection(error) {
-  return /crypto address|not-authorized-for-resource|403/i.test(String(error?.message ?? ""));
+  const message = String(error?.message ?? "");
+  // A post we are not allowed to reply to also comes back as a 403 with the
+  // same problem type, and stripping the address does nothing for it.
+  if (isUnrepliablePost(error)) return false;
+  return /crypto address|not-authorized-for-resource|403/i.test(message);
+}
+
+// X refuses the reply outright when the author limits who can reply, or when
+// the post stopped mentioning us (edited, or surfaced through a quote). No
+// wording gets around it, so retrying only burns quota against a wall.
+function isUnrepliablePost(error) {
+  return /You can only reply to or quote posts/i.test(String(error?.message ?? ""));
 }
 
 // Swaps an address out for somewhere it can always be read instead. Our own

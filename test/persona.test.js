@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GORK_NO_DATA_PROMPT, GORK_POST_SEEDS, GORK_SYSTEM_PROMPT } from "../src/persona.js";
+import { GORK_NO_DATA_PROMPT, GORK_POST_SEEDS, GORK_SYSTEM_PROMPT, tokenAwarenessPrompt } from "../src/persona.js";
 
 // The persona is free to change, but the floor that keeps the account alive is
 // not. These fail if a prompt rewrite drops a guard rail.
@@ -82,4 +82,21 @@ test("the persona knows what to do when a post is about the bot itself", () => {
 test("endorsements get a victory lap, not a token lookup", () => {
   assert.match(GORK_SYSTEM_PROMPT, /Endorsements sound like/i);
   assert.match(GORK_SYSTEM_PROMPT, /no ticker in a compliment/i);
+});
+
+test("a launched token stops the account denying it exists", () => {
+  // On launch day the bot replied "i don't launch tokens, deploy contracts,
+  // or sell presales" about its own token.
+  const prompt = tokenAwarenessPrompt({ launched: true, ticker: "PETERPAN", address: "0x8B92eEB78E4D918291441C9eA808b92276A0B47A" });
+  assert.match(prompt, /You launched \$PETERPAN/);
+  assert.match(prompt, /Never deny having a token/i);
+  // It still must never type the address itself.
+  assert.match(prompt, /Never type its address/i);
+  assert.doesNotMatch(prompt, /0x8B92/);
+});
+
+test("before launch it says so and warns about impostors", () => {
+  const prompt = tokenAwarenessPrompt({ launched: false });
+  assert.match(prompt, /have not launched/i);
+  assert.match(prompt, /scam/i);
 });

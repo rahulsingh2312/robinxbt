@@ -295,9 +295,12 @@ export class OnchainApi {
       // same wallet would reuse a nonce and one would be dropped.
       const receipt = await this.onchain.withWalletLock(session.authorId, async () => {
         const signer = this.vault.signerFor(wallet, this.chain.provider);
-        return asset === "eth"
-          ? await this.chain.sendEth(signer, to, amount)
-          : await this.chain.sendToken(signer, asset, to, amount);
+        if (asset === "eth") return this.chain.sendEth(signer, to, amount);
+        // Same rounding trap as selling: cap at what is actually held.
+        const meta = await this.chain.getTokenMeta(asset);
+        const held = (await this.chain.getTokenBalance(asset, wallet.address)).raw;
+        const requested = parseUnits(String(amount), meta.decimals);
+        return this.chain.sendTokenRaw(signer, asset, to, requested > held ? held : requested);
       });
       this.logger.info(`Withdraw by @${session.username}: ${amount} ${asset} -> ${to}, tx ${receipt.hash}`);
       sendJson(response, 200, { hash: receipt.hash });
@@ -321,7 +324,13 @@ export class OnchainApi {
     if (!Number.isFinite(amount) || amount <= 0) return sendJson(response, 400, { error: "`amount` must be positive" });
     try {
       const meta = await this.chain.getTokenMeta(token);
-      const amountIn = parseUnits(String(body.amount), meta.decimals);
+      const requested = parseUnits(String(body.amount), meta.decimals);
+      // The page shows a rounded float, so "Max" round-trips to slightly MORE
+      // than the wallet holds and the transfer fails. The chain's own number
+      // is the authority.
+      const held = (await this.chain.getTokenBalance(token, wallet.address)).raw;
+      const amountIn = requested > held ? held : requested;
+      if (amountIn <= 0n) return sendJson(response, 400, { error: `You don't hold any of that token.` });
       const result = await this.onchain.withWalletLock(session.authorId, async () => {
         const signer = this.vault.signerFor(wallet, this.chain.provider);
         return this.onchain.dex.swap(signer, token, NATIVE, amountIn);

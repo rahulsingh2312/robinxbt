@@ -84,7 +84,13 @@ export class ChainClient {
 
   async sendToken(signer, tokenAddress, to, amount) {
     const meta = await this.getTokenMeta(tokenAddress);
-    const tx = await this.erc20(tokenAddress, signer).transfer(to, parseUnits(String(amount), meta.decimals));
+    return this.sendTokenRaw(signer, tokenAddress, to, parseUnits(String(amount), meta.decimals));
+  }
+
+  // Takes base units directly, for callers that have already clamped to the
+  // on-chain balance rather than a rounded display value.
+  async sendTokenRaw(signer, tokenAddress, to, amountRaw) {
+    const tx = await this.erc20(tokenAddress, signer).transfer(to, amountRaw);
     return tx.wait();
   }
 }

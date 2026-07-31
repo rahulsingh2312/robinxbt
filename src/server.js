@@ -15,7 +15,7 @@ import { InsidersClient } from "./insiders.js";
 import { LlmClient } from "./llm.js";
 import { PaperBroker } from "./paper-broker.js";
 import { MentionStream } from "./stream.js";
-import { GORK_NO_DATA_PROMPT, GORK_POST_SEEDS, GORK_SYSTEM_PROMPT } from "./persona.js";
+import { GORK_NO_DATA_PROMPT, GORK_POST_SEEDS, GORK_SYSTEM_PROMPT, tokenAwarenessPrompt } from "./persona.js";
 import { Shitposter } from "./shitposter.js";
 import { StyleCorpus } from "./style-corpus.js";
 import { MarketData } from "./market-data.js";
@@ -116,7 +116,7 @@ const llm = config.llm.enabled
       broker: quoteSource,
       chainTools,
       ...(gork
-        ? { systemPrompt: GORK_SYSTEM_PROMPT, noDataPrompt: GORK_NO_DATA_PROMPT, styleProvider: corpus ? () => corpus.block() : null, retryNonEnglish: true }
+        ? { systemPrompt: GORK_SYSTEM_PROMPT + tokenAwarenessPrompt(config.token), noDataPrompt: GORK_NO_DATA_PROMPT, styleProvider: corpus ? () => corpus.block() : null, retryNonEnglish: true }
         : {})
     })
   : null;

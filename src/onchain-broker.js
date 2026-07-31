@@ -95,6 +95,7 @@ export class OnchainBroker {
     this.dex = dex;
     this.resolver = resolver;
     this.config = config;
+    this.token = config?.token ?? null;
     this.logger = logger;
     // One buy at a time per wallet: two mentions racing through the same
     // signer would collide on the account nonce and double-count balances.
@@ -104,6 +105,18 @@ export class OnchainBroker {
     // Fills and refusals speak in the account's voice; the numbers inside
     // them are produced here and never by the phrasing.
     this.voice = new TradeVoice(config.persona);
+  }
+
+  // Our own token, matched by the names people actually type for it, so
+  // "peter", "pan", "peterpan" and the configured ticker all mean the one
+  // contract we deployed. Returned in the shape the resolver would return.
+  ownToken(term) {
+    if (!this.token?.launched || !this.token.address) return null;
+    const normalized = String(term ?? "").trim().replace(/^\$/, "").replace(/[^a-z0-9]/gi, "").toUpperCase();
+    if (!normalized) return null;
+    const aliases = new Set([this.token.ticker, "PETER", "PAN", "PETERPAN"]);
+    if (!aliases.has(normalized)) return null;
+    return { symbol: this.token.ticker, address: this.token.address, official: true, decimals: 18 };
   }
 
   async withWalletLock(authorId, work) {
@@ -162,7 +175,9 @@ export class OnchainBroker {
     if (!term) {
       return { reply: this.voice.say("askAsset") };
     }
-    let asset = await this.resolver.resolve(term);
+    // Our own token is never looked up. We deployed it, we know the address,
+    // and a resolver miss on it reads as the bot not recognising itself.
+    let asset = this.ownToken(term) ?? await this.resolver.resolve(term);
     if (asset?.ambiguous) {
       return { reply: `Several tokens trade as ${term} and none is clearly the real one. Reply with the contract address and I’ll use exactly that.` };
     }
@@ -485,10 +500,13 @@ export class OnchainBroker {
 
     // Match by ticker or by address, whichever they gave.
     const term = String(intent.term ?? "").trim();
+    // "sell my peter" has to find the same contract "buy peter" bought.
+    const ownAddress = this.ownToken(term)?.address?.toLowerCase() ?? null;
     const holding = term
       ? holdings.find((item) =>
           item.symbol.toUpperCase() === term.replace(/^\$/, "").toUpperCase() ||
-          item.address.toLowerCase() === term.toLowerCase())
+          item.address.toLowerCase() === term.toLowerCase() ||
+          (ownAddress && item.address.toLowerCase() === ownAddress))
       : holdings[0];
     if (!holding) {
       return { reply: this.voice.say("nothingToSell", { symbol: term, held: holdings.slice(0, 3).map((item) => item.symbol).join(", ") }) };

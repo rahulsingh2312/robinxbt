@@ -99,7 +99,7 @@ if (config.onchain.enabled) {
   onchain = new OnchainBroker({
     store, vault, chain, dex, resolver,
     // The trading replies speak in whichever voice the account is running.
-    config: { ...config.onchain, persona: config.persona.name }
+    config: { ...config.onchain, persona: config.persona.name, token: config.token }
   });
   onchainApi = new OnchainApi({ config, store, vault, chain, onchain });
   // The answering model gets a way to ask what actually trades here, so it

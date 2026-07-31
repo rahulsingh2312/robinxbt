@@ -9,6 +9,15 @@
 
 const DEX_SCREENER = "https://api.dexscreener.com";
 const QUOTE_SYMBOLS = new Set(["USDG", "WETH", "ETH", "USDC", "USDT"]);
+// Tokenized equities trade here alongside memecoins and look identical in a
+// price feed. Telling them apart in the data is more reliable than asking the
+// model to remember which is which: it answered "best memecoin" with GME while
+// saying in the same sentence that GME is not a memecoin.
+const STOCK_SYMBOLS = new Set([
+  "GME", "NVDA", "TSLA", "AAPL", "AMC", "SPY", "MSFT", "AMZN", "GOOGL", "GOOG",
+  "META", "NFLX", "AMD", "INTC", "COIN", "HOOD", "PLTR", "MSTR", "BABA", "DIS",
+  "UBER", "SBUX", "NKE", "F", "T", "BA", "WMT", "QQQ"
+]);
 
 export class ChainTools {
   constructor({ resolver, dex, logger = console, fetchImpl = fetch }) {
@@ -97,9 +106,10 @@ export class ChainTools {
     const offset = Math.floor(Math.random() * ranked.length);
     const rotated = [...ranked.slice(offset), ...ranked.slice(0, offset)];
     return JSON.stringify({
-      note: "Live Robinhood Chain tokens. These are the on-chain assets that actually trade here. This list is deliberately NOT ordered by rank — pick whichever fits the question rather than whichever is first, and do not keep naming the same one to everybody.",
+      note: "Live Robinhood Chain tokens. These are the on-chain assets that actually trade here. This list is deliberately NOT ordered by rank — pick whichever fits the question rather than whichever is first, and do not keep naming the same one to everybody. Asked for a memecoin, gem, or low cap, choose kind=\"memecoin\"; kind=\"tokenized_stock\" is a share, not a memecoin.",
       tokens: rotated.map((token) => ({
         symbol: token.symbol,
+        kind: STOCK_SYMBOLS.has(token.symbol) ? "tokenized_stock" : "memecoin",
         priceUsd: token.priceUsd,
         change24hPercent: token.change24h,
         liquidityUsd: Math.round(token.liquidityUsd),

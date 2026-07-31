@@ -66,6 +66,15 @@ export class PostgresStore {
       ON xbot_wallets (bot_username, x_username)
     `);
     await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS xbot_baskets (
+        bot_username TEXT NOT NULL,
+        post_id TEXT NOT NULL,
+        data JSONB NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (bot_username, post_id)
+      )
+    `);
+    await this.pool.query(`
       CREATE TABLE IF NOT EXISTS xbot_pending_buys (
         bot_username TEXT NOT NULL,
         post_id TEXT NOT NULL,
@@ -242,6 +251,33 @@ export class PostgresStore {
     // Only the wallet that currently claims this handle may answer for it.
     if (row.data?.xUsername && row.data.xUsername !== xUsername.toLowerCase()) return null;
     return { ...row.data, authorId: row.author_id };
+  }
+
+  // A basket proposed in a reply, keyed by the bot's own post. These existed
+  // only on the JSON store, so every mention that reached the confirm path
+  // threw once production moved to Postgres — and a thrown handler answers
+  // nobody.
+  async savePendingBasket(botUsername, postId, basket) {
+    await this.pool.query(
+      `INSERT INTO xbot_baskets (bot_username, post_id, data) VALUES ($1, $2, $3::jsonb)
+       ON CONFLICT (bot_username, post_id) DO UPDATE SET data = EXCLUDED.data`,
+      [botUsername.toLowerCase(), String(postId), JSON.stringify(basket)]
+    );
+  }
+
+  async getPendingBasket(botUsername, postId) {
+    const result = await this.pool.query(
+      "SELECT data FROM xbot_baskets WHERE bot_username = $1 AND post_id = $2",
+      [botUsername.toLowerCase(), String(postId)]
+    );
+    return result.rows[0]?.data ?? null;
+  }
+
+  async clearPendingBasket(botUsername, postId) {
+    await this.pool.query(
+      "DELETE FROM xbot_baskets WHERE bot_username = $1 AND post_id = $2",
+      [botUsername.toLowerCase(), String(postId)]
+    );
   }
 
   async savePendingBuy(botUsername, postId, buy) {

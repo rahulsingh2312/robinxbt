@@ -36,3 +36,23 @@ test("different users still get different wallets under load", async () => {
   );
   assert.equal(new Set(wallets.map((wallet) => wallet.address)).size, 20);
 });
+
+test("both stores expose the same surface the worker calls", async () => {
+  // A method present on the JSON store but missing on Postgres threw inside
+  // the mention handler in production, so those mentions were answered with
+  // nothing at all. Comparing the surfaces catches the next one.
+  const { Store } = await import("../src/store.js");
+  const { PostgresStore } = await import("../src/postgres-store.js");
+  const required = [
+    "getUser", "setUser", "claimOrder", "claimMention", "releaseMention",
+    "savePendingBasket", "getPendingBasket", "clearPendingBasket",
+    "savePendingBuy", "getPendingBuy", "clearPendingBuy",
+    "getPaperBook", "setPaperBook", "recordSpend", "getSpend",
+    "getWalletByAuthor", "setWallet", "getWalletByUsername", "createWalletIfAbsent",
+    "getLastMentionId", "setLastMentionId"
+  ];
+  for (const method of required) {
+    assert.equal(typeof Store.prototype[method], "function", `JSON store missing ${method}`);
+    assert.equal(typeof PostgresStore.prototype[method], "function", `Postgres store missing ${method}`);
+  }
+});

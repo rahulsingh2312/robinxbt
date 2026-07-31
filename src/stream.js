@@ -9,7 +9,10 @@ const STREAM_URL = "https://api.x.com/2/tweets/search/stream"
 // the stream drops routinely — X closes idle connections and returns 429 while
 // the previous one is still being released. backfill replays the gap, which is
 // the difference between "the bot ignored me" and a few seconds of lag.
-const BACKFILL_MINUTES = 5;
+// Off unless the access tier includes it. Attempting it costs a failed
+// connect and a reconnect on every process start, which is a real gap in
+// coverage traded for a feature the account may not have.
+const BACKFILL_MINUTES = Number(process.env.STREAM_BACKFILL_MINUTES ?? 0);
 
 // X sends a keepalive newline about every 20 seconds. Silence past this means
 // the connection is dead in a way that never surfaces as an error.
@@ -24,7 +27,7 @@ export class MentionStream {
     this.backoffMs = 1_000;
     // Set once X rejects the parameter, so an unsupported access tier costs
     // one failed connect rather than an unrecoverable loop.
-    this.backfillUnavailable = false;
+    this.backfillUnavailable = !(BACKFILL_MINUTES > 0);
   }
 
   start() {

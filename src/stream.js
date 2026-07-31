@@ -5,6 +5,16 @@ const STREAM_URL = "https://api.x.com/2/tweets/search/stream"
   + "?tweet.fields=author_id,referenced_tweets,conversation_id,text"
   + "&expansions=author_id,referenced_tweets.id&user.fields=username";
 
+// A dropped stream loses every mention that arrives before it reconnects, and
+// the stream drops routinely — X closes idle connections and returns 429 while
+// the previous one is still being released. backfill replays the gap, which is
+// the difference between "the bot ignored me" and a few seconds of lag.
+const BACKFILL_MINUTES = 5;
+
+// X sends a keepalive newline about every 20 seconds. Silence past this means
+// the connection is dead in a way that never surfaces as an error.
+const STALL_TIMEOUT_MS = 90_000;
+
 export class MentionStream {
   constructor({ bearerToken, worker, logger = console }) {
     this.bearerToken = bearerToken;
@@ -12,6 +22,9 @@ export class MentionStream {
     this.logger = logger;
     this.stopped = false;
     this.backoffMs = 1_000;
+    // Set once X rejects the parameter, so an unsupported access tier costs
+    // one failed connect rather than an unrecoverable loop.
+    this.backfillUnavailable = false;
   }
 
   start() {
@@ -30,7 +43,19 @@ export class MentionStream {
         this.backoffMs = 1_000;
       } catch (error) {
         if (this.stopped) return;
-        this.logger.warn(`Stream disconnected (${String(error.message).slice(0, 120)}); retrying in ${this.backoffMs / 1000}s`);
+        const message = String(error.message);
+        // A 429 here means our own previous connection has not been released
+        // yet. Reconnecting fast guarantees another 429, so this case waits
+        // long enough for X to let go instead of hammering.
+        if (/\b429\b|maximum allowed connection/i.test(message)) {
+          this.backoffMs = Math.max(this.backoffMs, 60_000);
+        }
+        if (/backfill/i.test(message) && !this.backfillUnavailable) {
+          this.backfillUnavailable = true;
+          this.backoffMs = 1_000;
+          this.logger.warn("Stream backfill not available on this access tier; continuing without it");
+        }
+        this.logger.warn(`Stream disconnected (${message.slice(0, 120)}); retrying in ${this.backoffMs / 1000}s`);
       }
       if (this.stopped) return;
       await new Promise((resolve) => setTimeout(resolve, this.backoffMs));
@@ -42,11 +67,16 @@ export class MentionStream {
 
   async consume() {
     this.abort = new AbortController();
-    const response = await fetch(STREAM_URL, {
+    const url = this.backfillUnavailable ? STREAM_URL : `${STREAM_URL}&backfill_minutes=${BACKFILL_MINUTES}`;
+    // A connection that goes quiet is worse than one that errors: it looks
+    // healthy while delivering nothing.
+    const stall = setTimeout(() => this.abort?.abort(), STALL_TIMEOUT_MS);
+    const response = await fetch(url, {
       headers: { authorization: `Bearer ${this.bearerToken}` },
       signal: this.abort.signal
     });
     if (!response.ok) {
+      clearTimeout(stall);
       const body = await response.text().catch(() => "");
       throw new Error(`stream ${response.status}: ${body.slice(0, 140)}`);
     }
@@ -56,8 +86,13 @@ export class MentionStream {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let stallTimer = stall;
+    try {
     while (true) {
       const { done, value } = await reader.read();
+      // Any traffic, including the keepalive newline, proves it is alive.
+      clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => this.abort?.abort(), STALL_TIMEOUT_MS);
       if (done) throw new Error("stream closed by server");
       buffer += decoder.decode(value, { stream: true });
       let index;
@@ -70,6 +105,9 @@ export class MentionStream {
         // the first. Errors are handled inside handleLine.
         this.handleLine(line);
       }
+    }
+    } finally {
+      clearTimeout(stallTimer);
     }
   }
 

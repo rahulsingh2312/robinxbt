@@ -42,3 +42,18 @@ test("returns nothing for an unrecognized payload instead of throwing", () => {
   assert.deepEqual(extractMentions({ favorite_events: [{}] }), []);
   assert.deepEqual(extractMentions(null), []);
 });
+
+test("a 429 waits for X to release the old connection", async () => {
+  // Reconnecting immediately guarantees another 429, which is what turned a
+  // single dropped stream into a loop of them.
+  const { MentionStream } = await import("../src/stream.js");
+  const stream = new MentionStream({ bearerToken: "t", worker: {}, logger: { info() {}, warn() {}, error() {} } });
+  stream.backoffMs = 1_000;
+  stream.consume = async () => { throw new Error('stream 429: {"title":"ConnectionException","detail":"maximum allowed connection limit"}'); };
+  const waits = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms) => { waits.push(ms); stream.stopped = true; return realSetTimeout(fn, 0); };
+  await stream.run();
+  globalThis.setTimeout = realSetTimeout;
+  assert.ok(waits[0] >= 60_000, `waited ${waits[0]}ms after a 429`);
+});

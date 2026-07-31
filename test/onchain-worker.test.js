@@ -186,3 +186,14 @@ test("a bare address with no pending question is not an order", async () => {
   });
   assert.equal(calls.buys.length, 0);
 });
+
+test("a retried mention answers instead of going silent", async () => {
+  // The order claim survives a failed reply, so the retry cannot buy again —
+  // but it must not leave the person with no answer either.
+  const { worker, store, calls } = makeWorker();
+  await store.load();
+  await store.claimOrder("mybot", "970");
+  const reply = await worker.commandReply("@mybot buy $5 of NVDA", "alice", { id: "970", author_id: "42", text: "@mybot buy $5 of NVDA" });
+  assert.equal(calls.buys.length, 0, "must not place a second order");
+  assert.match(reply, /Already handled/i);
+});

@@ -180,7 +180,10 @@ export class MentionWorker {
     this.pendingBasket = null;
     this.pendingOnchainBuy = null;
     const reply = await this.commandReply(post.text, username, post);
-    if (reply === null) return;
+    if (reply === null) {
+      this.logger.warn(`No reply produced for mention ${post.id} from @${username}`);
+      return;
+    }
     return this.sendReply(post, reply, username);
   }
 
@@ -321,7 +324,10 @@ export class MentionWorker {
     if (intent?.wantsSell) {
       // Selling moves money exactly like buying does, so it takes the same
       // exactly-once claim: a retried mention must not sell twice.
-      if (post.id && !(await this.store.claimOrder(this.bot.botUsername, post.id))) return null;
+      if (post.id && !(await this.store.claimOrder(this.bot.botUsername, post.id))) {
+        this.logger.warn(`Sell for ${post.id} was already claimed; replying without re-selling`);
+        return `Already handled that one — check your portfolio, link in bio.`;
+      }
       try {
         const result = await this.onchain.handleSell({
           botUsername: this.bot.botUsername,
@@ -342,7 +348,13 @@ export class MentionWorker {
   async runOnchainBuy({ intent, pendingBuy = null, post, username }) {
     // Claimed before any chain call: a crash after the swap must not let the
     // retry path fill the same tweet twice.
-    if (post.id && !(await this.store.claimOrder(this.bot.botUsername, post.id))) return null;
+    // The order claim outlives a failed reply: if posting fell over after the
+    // trade, the retry must not place a second one. Returning null here meant
+    // the person was answered with silence instead, so say something.
+    if (post.id && !(await this.store.claimOrder(this.bot.botUsername, post.id))) {
+      this.logger.warn(`Order for ${post.id} was already claimed; replying without re-buying`);
+      return `Already handled that one — check your portfolio, link in bio.`;
+    }
     try {
       const parent = await this.parentContext(post);
       // Buying straight off any tweet is the product: someone shills a token,

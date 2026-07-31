@@ -66,6 +66,10 @@ export class Shitposter {
   async resume() {
     const lastPostAt = await this.store?.getLastPostAt?.(this.bot.botUsername);
     if (!lastPostAt) {
+      // Nothing recorded yet, so anchor the clock now. Without this the very
+      // problem being fixed survives until the first post lands: restarts
+      // before it would each re-roll the delay and the timeline stays silent.
+      await this.store?.setLastPostAt?.(this.bot.botUsername, Date.now()).catch(() => {});
       this.schedule();
       return;
     }

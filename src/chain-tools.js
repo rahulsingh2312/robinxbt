@@ -57,9 +57,13 @@ export class ChainTools {
 
   // The chain's most-traded tokens by real pool liquidity.
   async topTokens() {
-    if (this.trendingCache && Date.now() - this.trendingCache.at < 5 * 60_000) return this.trendingCache.value;
+    if (this.trendingCache && Date.now() - this.trendingCache.at < 5 * 60_000) {
+      // Rotated per call, not per cache window: within one five-minute window
+      // every asker would otherwise be handed the identical leading ticker.
+      return this.render(this.trendingCache.ranked);
+    }
     const byToken = new Map();
-    for (const query of ["virtuals", "cat", "meme", "robinhood chain", "agent"]) {
+    for (const query of ["virtuals", "cat", "meme", "robinhood chain", "agent", "gme", "stock", "usdg"]) {
       const response = await this.fetch(`${DEX_SCREENER}/latest/dex/search?q=${encodeURIComponent(query)}`, {
         signal: AbortSignal.timeout(6_000)
       }).catch(() => null);
@@ -78,21 +82,30 @@ export class ChainTools {
         byToken.set(symbol, entry);
       }
     }
-    const ranked = [...byToken.values()].sort((a, b) => b.liquidityUsd - a.liquidityUsd).slice(0, 12);
-    const value = ranked.length === 0
-      ? "No on-chain token data available right now."
-      : JSON.stringify({
-          note: "Live Robinhood Chain tokens. These are the on-chain assets that actually trade here.",
-          tokens: ranked.map((token) => ({
-            symbol: token.symbol,
-            priceUsd: token.priceUsd,
-            change24hPercent: token.change24h,
-            liquidityUsd: Math.round(token.liquidityUsd),
-            volume24hUsd: Math.round(token.volume24h)
-          }))
-        });
-    this.trendingCache = { value, at: Date.now() };
-    return value;
+    // Ranked by liquidity, then rotated before it is shown. Handing the model
+    // the same ordering every time produced an account that recommended one
+    // ticker to everybody — GME took 49 of the first 130 picks. The set is
+    // still liquidity-gated, so rotation changes which real token leads, not
+    // whether it is worth naming.
+    const ranked = [...byToken.values()].sort((a, b) => b.liquidityUsd - a.liquidityUsd).slice(0, 16);
+    this.trendingCache = { ranked, at: Date.now() };
+    return this.render(ranked);
+  }
+
+  render(ranked = []) {
+    if (ranked.length === 0) return "No on-chain token data available right now.";
+    const offset = Math.floor(Math.random() * ranked.length);
+    const rotated = [...ranked.slice(offset), ...ranked.slice(0, offset)];
+    return JSON.stringify({
+      note: "Live Robinhood Chain tokens. These are the on-chain assets that actually trade here. This list is deliberately NOT ordered by rank — pick whichever fits the question rather than whichever is first, and do not keep naming the same one to everybody.",
+      tokens: rotated.map((token) => ({
+        symbol: token.symbol,
+        priceUsd: token.priceUsd,
+        change24hPercent: token.change24h,
+        liquidityUsd: Math.round(token.liquidityUsd),
+        volume24hUsd: Math.round(token.volume24h)
+      }))
+    });
   }
 
   // Whether a specific thing can be bought, answered by trying to route it.

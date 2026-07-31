@@ -1,17 +1,19 @@
 import { fitForPost, limitCashtags } from "./insiders.js";
 
 // Unprompted posting on a randomized cadence, so the timeline reads like a
-// person with opinions rather than a cron job. Restart cost is at most one
-// rescheduled delay — deliberately not persisted, since posting a few hours
-// early after a deploy is harmless and worth the simpler store.
+// person with opinions rather than a cron job. The time of the last post is
+// persisted: a fresh timer on every boot meant a day of deploys could starve
+// the timeline completely, since each restart re-rolled the delay before it
+// ever expired.
 export class Shitposter {
-  constructor({ client, llm, bot, seeds, minIntervalMs, maxIntervalMs, memory = 5, logger = console }) {
+  constructor({ client, llm, bot, seeds, minIntervalMs, maxIntervalMs, memory = 5, store = null, logger = console }) {
     this.client = client;
     this.llm = llm;
     this.bot = bot;
     this.seeds = seeds;
     this.minIntervalMs = minIntervalMs;
     this.maxIntervalMs = maxIntervalMs;
+    this.store = store;
     this.logger = logger;
     // Independent generations against the same market data converge on the
     // same lede — two posts in a row opened "nvda down 5%". The model is shown
@@ -51,8 +53,36 @@ export class Shitposter {
   }
 
   start() {
-    this.schedule();
     this.logger.info(`Shitposter armed for @${this.bot.botUsername}: every ${Math.round(this.minIntervalMs / 60_000)}–${Math.round(this.maxIntervalMs / 60_000)} minutes${this.bot.dryRun ? " (dry run)" : ""}`);
+    // Scheduled off the last post rather than off boot. Not awaited: a slow or
+    // unreachable store must not hold up the rest of startup, and the fallback
+    // is exactly the old behaviour.
+    this.resume().catch((error) => {
+      this.logger.warn(`Could not read the last post time: ${error.message}`);
+      if (!this.timer) this.schedule();
+    });
+  }
+
+  async resume() {
+    const lastPostAt = await this.store?.getLastPostAt?.(this.bot.botUsername);
+    if (!lastPostAt) {
+      this.schedule();
+      return;
+    }
+    const elapsed = Date.now() - lastPostAt;
+    if (elapsed >= this.maxIntervalMs) {
+      // Overdue. Jittered rather than immediate so a restart loop cannot turn
+      // into a burst of posts.
+      const delay = randomDelay(60_000, 240_000);
+      this.timer = setTimeout(() => this.fire(), delay);
+      this.logger.info(`Last post was ${Math.round(elapsed / 60_000)}m ago; posting in ${Math.round(delay / 60_000)}m`);
+      return;
+    }
+    // Still inside the window: keep the remaining time rather than restarting
+    // the clock, so restarts neither delay nor bunch up the cadence.
+    const remainingMin = Math.max(this.minIntervalMs - elapsed, 60_000);
+    const remainingMax = Math.max(this.maxIntervalMs - elapsed, remainingMin);
+    this.timer = setTimeout(() => this.fire(), randomDelay(remainingMin, remainingMax));
   }
 
   stop() {
@@ -96,6 +126,7 @@ export class Shitposter {
       } else {
         const sent = await this.client.post(text);
         this.logger.info(`Posted ${sent?.data?.id ?? "unknown"}: ${text}`);
+        await this.store?.setLastPostAt?.(this.bot.botUsername, Date.now()).catch(() => {});
       }
     } catch (error) {
       // A failed slot is skipped, not retried: the next scheduled post is

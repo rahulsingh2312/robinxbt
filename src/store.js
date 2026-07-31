@@ -206,7 +206,20 @@ export class Store {
   }
 
   async setLastMentionId(botUsername, id) {
-    this.data.state[botUsername.toLowerCase()] = { lastMentionId: id };
+    // Merged, not replaced: this row holds more than one field now, and
+    // overwriting it wholesale silently drops the others.
+    const key = botUsername.toLowerCase();
+    this.data.state[key] = { ...this.data.state[key], lastMentionId: id };
+    await this.save();
+  }
+
+  async getLastPostAt(botUsername) {
+    return this.data.state[botUsername.toLowerCase()]?.lastPostAt ?? null;
+  }
+
+  async setLastPostAt(botUsername, at) {
+    const key = botUsername.toLowerCase();
+    this.data.state[key] = { ...this.data.state[key], lastPostAt: at };
     await this.save();
   }
 }

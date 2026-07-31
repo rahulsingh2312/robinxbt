@@ -49,7 +49,7 @@ test("both stores expose the same surface the worker calls", async () => {
     "savePendingBuy", "getPendingBuy", "clearPendingBuy",
     "getPaperBook", "setPaperBook", "recordSpend", "getSpend",
     "getWalletByAuthor", "setWallet", "getWalletByUsername", "createWalletIfAbsent",
-    "getLastMentionId", "setLastMentionId"
+    "getLastMentionId", "setLastMentionId", "getLastPostAt", "setLastPostAt"
   ];
   for (const method of required) {
     assert.equal(typeof Store.prototype[method], "function", `JSON store missing ${method}`);

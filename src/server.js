@@ -177,6 +177,7 @@ shitposter = gork && config.persona.posting.enabled && llm?.configured() && work
       llm,
       bot: config.bots[0],
       seeds: GORK_POST_SEEDS,
+      store,
       ...config.persona.posting
     })
   : null;

@@ -25,6 +25,8 @@ export class PostgresStore {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
+    // Added after the table shipped, so it is a migration rather than a column.
+    await this.pool.query(`ALTER TABLE xbot_state ADD COLUMN IF NOT EXISTS last_post_at TIMESTAMPTZ`);
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS xbot_orders (
         bot_username TEXT NOT NULL,
@@ -328,6 +330,22 @@ export class PostgresStore {
   async getLastMentionId(botUsername) {
     const result = await this.pool.query("SELECT last_mention_id FROM xbot_state WHERE bot_username = $1", [botUsername.toLowerCase()]);
     return result.rows[0]?.last_mention_id ?? null;
+  }
+
+  async getLastPostAt(botUsername) {
+    const result = await this.pool.query("SELECT last_post_at FROM xbot_state WHERE bot_username = $1", [botUsername.toLowerCase()]);
+    const value = result.rows[0]?.last_post_at;
+    return value ? new Date(value).getTime() : null;
+  }
+
+  async setLastPostAt(botUsername, at) {
+    await this.pool.query(
+      `INSERT INTO xbot_state (bot_username, last_post_at)
+       VALUES ($1, to_timestamp($2 / 1000.0))
+       ON CONFLICT (bot_username)
+       DO UPDATE SET last_post_at = EXCLUDED.last_post_at, updated_at = now()`,
+      [botUsername.toLowerCase(), at]
+    );
   }
 
   async setLastMentionId(botUsername, id) {

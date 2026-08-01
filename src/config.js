@@ -245,7 +245,10 @@ function loadBots() {
     if (!/^[a-z0-9_]{1,15}$/.test(botUsername)) throw new Error("Each bot username must be a valid X username");
     if (usernames.has(botUsername)) throw new Error(`Duplicate bot username: ${botUsername}`);
     usernames.add(botUsername);
-    return { botUsername, botUserId, userAccessToken, oauth1, pollIntervalMs, dryRun };
+    // The other agent from the same team. Blank disables the exchange cutoff
+    // entirely, so a deployment without a sibling behaves exactly as before.
+    const siblingUserId = String(process.env.X_SIBLING_USER_ID ?? "").trim();
+    return { botUsername, botUserId, userAccessToken, oauth1, pollIntervalMs, dryRun, siblingUserId };
   });
 }
 

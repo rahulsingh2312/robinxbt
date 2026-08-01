@@ -9,6 +9,22 @@ import { redact } from "./http-guard.js";
 import { looksLikeToolMarkup } from "./llm.js";
 import { TradeVoice } from "./trade-voice.js";
 
+// Two bots mentioning each other is a thread with no end condition: every reply
+// is a mention that earns another reply, at a cost per post and in near-
+// duplicate language that X's automation rules treat as spam. Three exchanges,
+// one sign-off, then silence.
+const SIBLING_MAX_TURNS = 3;
+
+// Varied on purpose. A fixed sign-off at the end of every bot thread is exactly
+// the duplicate-content pattern the automation rules prohibit.
+const SIBLING_FAREWELLS = [
+  "three rounds and neither of us moved a price. i'm out.",
+  "that's three. go stare at a rocket, i've got orders to fill.",
+  "we're farming each other's timeline at this point. done here.",
+  "i've said my piece three times. bye.",
+  "this is the part where two bots agree to stop. later."
+];
+
 // Deliberately broad: every phrasing of "what is your contract address" has to
 // hit the deterministic answer rather than reach the model.
 const ASKS_FOR_CONTRACT = /\b(ca|c\.a\.|contract|contract address|token address|your token|ur token|token ca|address of (?:your|ur) token|what.{0,12}(?:you|u|ur|your)\s+(?:token|coin|ca))\b/i;
@@ -62,6 +78,27 @@ export class MentionWorker {
     // character and send somebody to a different contract.
     this.token = token;
     this.voice = new TradeVoice(persona);
+  }
+
+  // Counts exchanges with the sibling bot inside one conversation and ends the
+  // thread. Keyed on conversation_id so the two can still start a fresh thread
+  // elsewhere — the cutoff kills a loop, not the relationship.
+  async siblingCutoff(post) {
+    const sibling = this.bot.siblingUserId;
+    if (!sibling || String(post.author_id) !== String(sibling)) return { stop: false };
+    if (!this.store.countSiblingTurn) return { stop: false };
+
+    const conversation = post.conversation_id ?? post.id;
+    const turn = await this.store.countSiblingTurn(conversation);
+    if (turn <= SIBLING_MAX_TURNS) return { stop: false };
+
+    // Exactly one sign-off, on the first turn past the limit. Everything after
+    // it is silence — a farewell per mention would be its own loop.
+    if (turn === SIBLING_MAX_TURNS + 1) {
+      const index = Number(BigInt(conversation) % BigInt(SIBLING_FAREWELLS.length));
+      return { stop: true, reason: `turn ${turn}, signing off`, farewell: SIBLING_FAREWELLS[index] };
+    }
+    return { stop: true, reason: `turn ${turn}, past cutoff, staying silent` };
   }
 
   // Returns the reason a reply is refused, or null when it is allowed.
@@ -155,6 +192,15 @@ export class MentionWorker {
     // The stream, the poll loop, and webhooks can all deliver the same post;
     // whichever arrives first wins and the rest are dropped here.
     if (post.id && !(await this.store.claimMention(this.bot.botUsername, post.id))) return;
+    // Checked before the model runs: past the cutoff there is nothing to
+    // compose, so the turn must never be billed.
+    const sibling = await this.siblingCutoff(post);
+    if (sibling.stop) {
+      this.logger.info(`Sibling thread ${post.conversation_id ?? post.id}: ${sibling.reason}`);
+      if (sibling.farewell) return this.sendReply(post, sibling.farewell, post.username ?? "there");
+      return;
+    }
+
     // Checked before the model runs, so a capped mention costs nothing.
     const capped = await this.cappedReason(post.author_id);
     if (capped) {

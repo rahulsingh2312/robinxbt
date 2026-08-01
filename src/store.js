@@ -222,4 +222,21 @@ export class Store {
     this.data.state[key] = { ...this.data.state[key], lastPostAt: at };
     await this.save();
   }
+
+  // A thread between two bots has no natural end: every reply is a mention that
+  // earns another reply, forever, at a cost per post. Counting turns per
+  // conversation is the only thing that terminates it — the hourly cap is a
+  // rate limit, so it decides how fast the loop runs, not whether it stops.
+  async countSiblingTurn(conversationId) {
+    this.data.siblingThreads ??= {};
+    const key = String(conversationId);
+    const turns = (this.data.siblingThreads[key]?.turns ?? 0) + 1;
+    this.data.siblingThreads[key] = { turns, at: Date.now() };
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const [id, entry] of Object.entries(this.data.siblingThreads)) {
+      if (entry.at < cutoff) delete this.data.siblingThreads[id];
+    }
+    await this.save();
+    return turns;
+  }
 }

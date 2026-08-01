@@ -1,7 +1,13 @@
-# We ran two AI agents on X for four days. Here is what actually happened.
+# We put an AI agent on X that trades out of a reply. Here is what actually happened.
 
-Two accounts, both built by @DrOfAgents. One of them held people's money. One of
-them did not. That difference turned out to be the whole story.
+@TryPeterpan went live on 29 July and spent 2.7 days executing real trades for
+strangers who tweeted at it. This is the writeup: what people did, where they got
+stuck, what it cost, and how it died.
+
+Partway through we launched a second, much smaller account, @OptimusAI_BNB, to
+see whether the format itself travels or whether Peterpan was a one off. It is
+fifteen hours old and holds nothing. It is a side test, not a twin, and it shows
+up here only where it tells us something Peterpan alone could not.
 
 This is written up honestly, including the parts where we were wrong about our
 own product.
@@ -14,9 +20,11 @@ own product.
 tweet "buy $20 of X" at it and it fills the order from a wallet it generates for
 you on Robinhood Chain. It has custody of the keys until you export them.
 
-**@OptimusAI_BNB** went live on 31 July. It is a markets account with a live data
-feed, obsessed with SpaceX, carrying its own token on BNB Chain. It holds nothing.
-It cannot touch anyone's money. It talks.
+**@OptimusAI_BNB** went live on 31 July as a much smaller follow on, to test
+whether the format travels beyond one account. It is a markets account with a
+live data feed, obsessed with SpaceX, carrying its own token on BNB Chain. It
+holds nothing and cannot touch anyone's money. It talks. Fifteen hours of it
+exist, so nothing here rests on it.
 
 Both have their own memecoin. Both are labelled as automated. Neither is
 affiliated with any company they talk about.
@@ -123,24 +131,25 @@ of our users had no way to reach their own wallet at all.
 
 ---
 
-## The accidental control group
+## What the sibling account hinted at
 
-Here is the thing that makes this more than a list of bugs.
+The small side test did tell us one thing worth writing down.
 
-Peterpan holds keys. It got 13 scam accusations from 9 people.
+Peterpan holds keys. It got 13 scam accusations from 9 people. Optimus holds
+nothing, and across 79 posts from 15 real users it got **zero** — despite being
+ruder, more aggressive, and carrying a token of its own.
 
-Optimus holds nothing. Across 79 posts from 15 real users, it got **zero**.
+Fifteen users is not a control group and we are not going to pretend it is. The
+accounts differ in more than custody: different chain, different age, different
+audience, and half of Optimus's traffic is Peterpan talking to it. Treat it as a
+hint, not a finding.
 
-Not one person said they distrusted Optimus, and not one person accused it of
-anything, despite it being ruder, more aggressive, and carrying a token of its
-own. The only difference between the two accounts is custody, and custody is
-where every trust complaint landed.
-
-We assumed people would not trust an AI with their money. Nobody in 278 posts
-said that. What they said, over and over, was a version of "I cannot find how to
-get my money out." The distrust was not a belief anyone showed up with. It was
-something our interface manufactured, in about twelve minutes, from a hidden
-button.
+The reason it is worth mentioning at all is that it points the same way the
+Peterpan data already does. We assumed people would not trust an AI with their
+money. Nobody in 278 posts said that. What they said, over and over, was a
+version of "I cannot find how to get my money out." The distrust was not a belief
+anyone showed up with. It was something our interface manufactured, in about
+twelve minutes, from a hidden button.
 
 That is much better news than the alternative. A belief problem is hard. A
 missing sentence is not.
@@ -187,7 +196,7 @@ severe. The engagement of the people who converted was not the problem.
 Three hundred thousand dollars of volume moved through the tokens. Two people
 deposited into the actual product.
 
-The agents are extremely good at getting attention and extremely bad, so far, at
+Peterpan is extremely good at getting attention and extremely bad, so far, at
 converting it into product usage. That is worth saying plainly rather than
 dressing up.
 
